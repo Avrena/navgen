@@ -1,0 +1,6 @@
+.venv/
+work/
+reports/measurements/
+__pycache__/
+*.egg-info/
+*.pyc
