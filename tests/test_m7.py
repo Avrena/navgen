@@ -13,7 +13,7 @@ from navgen.collision import batch_trace
 from navgen.hiding import compute_hiding_spots
 from navgen.navio import write_nav
 from navgen.runtime import configure_threads, source_fingerprint, trace_count
-from navgen.sampling import sample
+from navgen.sampling import sample, crouch_node, crouch_nodes
 from test_generation import collision, quiet
 
 
@@ -73,6 +73,20 @@ print(json.dumps([hit[0],trace_count(scene)]))
                 output=subprocess.check_output(command,env=env,text=True,stderr=subprocess.STDOUT)
                 self.assertEqual(output.splitlines()[-1],'[1.0, 1]')
                 if attempt:self.assertIn('[cache] data loaded',output)
+
+    def test_crouch_uses_node_position_and_keeps_sticky_flags(self):
+        world=collision([([-100,-100,-20],[100,100,0]),([-100,-100,75],[100,100,90])])
+        # An incoming point can resolve to the node within the 11.25 Z tolerance.
+        incoming=np.array([0.,0.,.03125]);stored=np.array([[0.,0.,5.]])
+        low=np.zeros(4,np.bool_);blocked=np.zeros(4,np.bool_);ground=np.zeros(4)
+        crouch_node(world.scene,incoming,low,blocked,ground)
+        self.assertFalse(low.any())
+        flags=np.zeros((1,4),np.bool_);blocks=flags.copy();heights=np.zeros((1,4))
+        crouch_nodes(world.scene,stored,flags,blocks,heights)
+        self.assertTrue(flags.all());self.assertFalse(blocks.any())
+        # CheckCrouch can set a flag, but cannot clear it on another call.
+        crouch_node(world.scene,incoming,flags[0],blocks[0],heights[0])
+        self.assertTrue(flags.all());np.testing.assert_array_equal(heights,np.zeros((1,4)))
 
 
 if __name__=='__main__':unittest.main()

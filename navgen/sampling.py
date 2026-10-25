@@ -105,7 +105,7 @@ def embedded_displacement(scene,point):
 def crouch_node(scene,point,crouch,blocked,ground):
     # nav_node.cpp:278; GMod x64 RVA 0xd5840: 55 crouch, 71 standing.
     for c in range(4):
-        crouch[c]=False;blocked[c]=False;ground[c]=0
+        ground[c]=0
         up=point.copy();up[2]+=64
         tr=trace(scene,point,up,THIN_MIN,THIN_MAX)
         ceiling=64*tr[0]
@@ -119,8 +119,17 @@ def crouch_node(scene,point,crouch,blocked,ground):
             if not tr[4]:
                 ground[c]=height;maxs[2]=71
                 tr=trace(scene,start,start,mins,maxs)
-                crouch[c]=tr[4];found=True;break
+                if tr[4]:crouch[c]=True
+                found=True;break
         if not found: ground[c]=64;blocked[c]=True;crouch[c]=True
+
+
+@njit(parallel=True)
+def crouch_nodes(scene,positions,crouch,blocked,ground):
+    # CheckCrouch uses the stored node position. Static collision makes its
+    # repeated sticky tests equivalent to one evaluation per completed node.
+    for i in prange(len(positions)):
+        crouch_node(scene,positions[i],crouch[i],blocked[i],ground[i])
 
 
 @njit
@@ -158,9 +167,6 @@ def sampling_probe(scene,start,d,row,bounds,slope_limit):
     if overlapped(scene,point) or embedded_displacement(scene,point):return
     row[0]=1;row[1:4]=point;row[4:7]=np.array([r[1],r[2],r[3]])
     row[7]=r[7];row[8]=height;row[9]=oa;row[10]=ob
-    crouch=np.zeros(4,np.bool_);blocked=np.zeros(4,np.bool_);ground=np.zeros(4)
-    crouch_node(scene,point,crouch,blocked,ground)
-    row[11:15]=crouch;row[15:19]=blocked;row[19:23]=ground
 
 
 @njit(parallel=True)
@@ -205,7 +211,6 @@ def sample_chunk(scene,seeds,index,arrays,count,current,seedindex,bounds,slope_l
                 if find_node(index,arrays,point)>=0: continue
                 add_node(index,arrays,point,np.array([r[1],r[2],r[3]]),-1,count,r[7])
                 current=count;count+=1
-                crouch_node(scene,point,crouch[current],blocked[current],ground[current])
                 break
             if current<0: return count,current,seedindex,True
         direction=-1
@@ -240,9 +245,6 @@ def sample_chunk(scene,seeds,index,arrays,count,current,seedindex,bounds,slope_l
             links[other,back]=current;visited[other]|=1<<back
             obsh[other,back]=max(0.,height+delta) if height>0 else 0.
             obsa[other,back]=25-ob;obsb[other,back]=25-oa
-        if memo is None or cached<0:crouch_node(scene,point,crouch[other],blocked[other],ground[other])
-        else:
-            crouch[other]=records[cached,11:15];blocked[other]=records[cached,15:19];ground[other]=records[cached,19:23]
         if new: current=other
     return count,current,seedindex,False
 
@@ -261,7 +263,7 @@ def sample(collision,seeds,bounds,progress=print,slope_limit=.7):
     count,current,seedindex=0,-1,0;bounds=np.asarray(bounds,dtype=np.float64)
     parallel=get_num_threads()>1
     memo=Dict.empty(key_type=types.UniTuple(types.int64,4),value_type=types.int64) if parallel else None
-    records=np.empty((262144,23)) if parallel else None
+    records=np.empty((262144,11)) if parallel else None
     metrics=np.zeros(3,np.int64);offset=0
     started=time.perf_counter();last=started
     while True:
@@ -280,9 +282,10 @@ def sample(collision,seeds,bounds,progress=print,slope_limit=.7):
             grown=allocate(len(arrays[0])*2)
             for a,b in zip(grown,arrays): a[:count]=b[:count]
             arrays=grown
+    crouch_nodes(collision.scene,arrays[0][:count],arrays[6][:count],arrays[7][:count],arrays[8][:count])
     collision.sampling_speculation={'enabled':parallel,'lookup_attempts':int(metrics[0]),'cache_hits':int(metrics[1]),
         'computed_jobs':int(metrics[2]),'lookup_hit_rate':float(metrics[1]/max(1,metrics[0])),
-        'consumed_per_computed_job':float(metrics[1]/max(1,metrics[2]))}
+        'consumed_per_computed_job':float(metrics[1]/max(1,metrics[2])),'crouch_nodes_tested':count}
     return tuple(a[:count].copy() for a in arrays),index
 
 
