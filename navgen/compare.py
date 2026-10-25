@@ -6,7 +6,7 @@ import sys
 import time
 
 import numpy as np
-from numba import njit
+from .runtime import njit
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree

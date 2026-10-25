@@ -8,9 +8,10 @@ from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
-from numba import njit
+from .runtime import njit, prange, get_thread_id, config
 
 from .bsp import BRUSH_MASK, NPC_MASK, Content, box_vertices, brush_vertices, convex_planes, entity_angles, parse_phy, rotation, vector
+from .planes import triangle_kernel, triangle_batch
 
 EPS = .03125
 THIN_MIN = np.array([-.45,-.45,0.])
@@ -48,7 +49,7 @@ def clip(planes, start, end, mins, maxs, first, count):
 @njit
 def trace(scene, start, end, mins, maxs, mask=BRUSH_MASK, walk=True, brute=False):
     planes,pflags,first,count,lo,hi,meta,front,blo,bhi,escape,leaf,order,stats = scene
-    stats[0]+=1
+    stats[get_thread_id()*8]+=1
     best=1.;nx=0.;ny=0.;nz=0.;ss=False;als=False;contents=0;disp=False;surf=0;hit=-1
     qlo=np.minimum(start,end)+mins-EPS
     qhi=np.maximum(start,end)+maxs+EPS
@@ -95,10 +96,10 @@ def trace(scene, start, end, mins, maxs, mask=BRUSH_MASK, walk=True, brute=False
     return best,nx,ny,nz,ss,als,contents,disp,surf,hit
 
 
-@njit
+@njit(parallel=True)
 def batch_trace(scene,starts,ends,mins,maxs,mask=BRUSH_MASK,walk=True,brute=False):
     out=np.empty((len(starts),10))
-    for i in range(len(starts)):
+    for i in prange(len(starts)):
         r=trace(scene,starts[i],ends[i],mins[i],maxs[i],mask,walk,brute)
         out[i,0]=r[0];out[i,1]=r[1];out[i,2]=r[2];out[i,3]=r[3]
         out[i,4]=r[4];out[i,5]=r[5];out[i,6]=r[6];out[i,7]=r[7];out[i,8]=r[8];out[i,9]=r[9]
@@ -106,19 +107,8 @@ def batch_trace(scene,starts,ends,mins,maxs,mask=BRUSH_MASK,walk=True,brute=Fals
 
 
 def triangle_planes(points):
-    edges=np.roll(points,-1,axis=0)-points
-    normal=np.cross(edges[0],-edges[2]); length=np.linalg.norm(normal)
-    if length<1e-8: return None,None
-    normal/=length
-    axes=[normal,*np.eye(3)]
-    for edge in edges:
-        for axis in np.eye(3):
-            n=np.cross(edge,axis); length=np.linalg.norm(n)
-            if length>1e-8: axes.append(n/length)
-    planes=[]
-    for axis in axes:
-        planes.extend((np.r_[axis,np.max(points@axis)],np.r_[-axis,np.max(points@-axis)]))
-    return np.array(planes),np.r_[normal,points[0]@normal]
+    planes,front=triangle_kernel(points)
+    return (planes,front) if len(planes) else (None,None)
 
 
 def build_bvh(lo,hi):
@@ -159,7 +149,7 @@ class SceneBuilder:
         return (np.concatenate(self.planes) if self.planes else np.empty((0,4)),
                 np.concatenate(self.flags) if self.flags else np.empty(0,dtype=np.int64),
                 np.asarray(self.first,np.int64),np.asarray(self.count,np.int64),lo,hi,
-                np.asarray(self.meta,np.int64).reshape(-1,6),np.asarray(self.front,np.float64).reshape(-1,4),*build_bvh(lo,hi),np.zeros(1,np.int64))
+                np.asarray(self.meta,np.int64).reshape(-1,6),np.asarray(self.front,np.float64).reshape(-1,4),*build_bvh(lo,hi),np.zeros(config.NUMBA_NUM_THREADS*8,np.int64))
 
 
 # SDK bmodels.cpp, buttons.cpp, doors.h, func_movelinear.cpp and trains.h:
@@ -289,10 +279,12 @@ class Collision:
         counts['missing_phy_bbox_instances']=counts['missing_phy_solid_instances'] if missing_phy=='bbox' else 0
         unresolved.extend(f'missing PHY ({missing_instances[name]} solid instances, {missing_phy}): {name}' for name in sorted(missing_instances))
         progress(f'collision static props: {counts["prop_convex_instances"]} convex instances, missing PHY {counts["missing_phy_solid_instances"]} ({missing_phy}; {time.perf_counter()-begin:.2f}s)',flush=True)
-        for points,contents,tags in bsp.displacements():
-            planes,front=triangle_planes(points)
-            if planes is None: continue
-            builder.add(planes,points.min(0),points.max(0),contents,kind=2,front=front)
+        terrain=list(bsp.displacements())
+        triangles=np.asarray([t[0] for t in terrain],np.float64).reshape(-1,3,3)
+        planes,fronts,sizes=triangle_batch(triangles)
+        for i,(points,contents,tags) in enumerate(terrain):
+            if not sizes[i]:continue
+            builder.add(planes[i,:sizes[i]],points.min(0),points.max(0),contents,kind=2,front=fronts[i])
             counts['displacement_triangles']+=1
         progress(f'collision terrain: {counts["displacement_triangles"]} triangles; building BVH',flush=True)
         scene=builder.pack()

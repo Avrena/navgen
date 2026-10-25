@@ -2,8 +2,9 @@
 import time
 
 import numpy as np
-from numba import njit, types
+from numba import types
 from numba.typed import Dict
+from .runtime import njit, prange, get_num_threads, trace_count
 
 from .collision import BRUSH_MASK, THIN_MIN, THIN_MAX, trace
 
@@ -143,7 +144,51 @@ def add_node(index,arrays,point,norm,source,count,on_disp):
 
 
 @njit
-def sample_chunk(scene,seeds,index,arrays,count,current,seedindex,bounds,slope_limit=.7,attempt_limit=10000):
+def probe_key(point,d):
+    bits=point.view(np.int64)
+    return bits[0],bits[1],bits[2],d
+
+
+@njit
+def sampling_probe(scene,start,d,row,bounds,slope_limit):
+    row[:]=0;target=start+DIRECTIONS[d]*25
+    if target[0]<bounds[0,0] or target[1]<bounds[0,1] or target[0]>bounds[1,0] or target[1]>bounds[1,1]:return
+    good,point,r,height,oa,ob=move_node(scene,start,target,slope_limit)
+    if not good or r[8]&6:return
+    if overlapped(scene,point) or embedded_displacement(scene,point):return
+    row[0]=1;row[1:4]=point;row[4:7]=np.array([r[1],r[2],r[3]])
+    row[7]=r[7];row[8]=height;row[9]=oa;row[10]=ob
+    crouch=np.zeros(4,np.bool_);blocked=np.zeros(4,np.bool_);ground=np.zeros(4)
+    crouch_node(scene,point,crouch,blocked,ground)
+    row[11:15]=crouch;row[15:19]=blocked;row[19:23]=ground
+
+
+@njit(parallel=True)
+def sampling_probes(scene,jobs,records,offset,bounds,slope_limit):
+    for i in prange(len(jobs)):
+        sampling_probe(scene,jobs[i,:3].copy(),int(jobs[i,3]),records[offset+i],bounds,slope_limit)
+
+
+@njit
+def speculation_jobs(arrays,current,memo,offset):
+    # Look ahead on the real DFS frontier. Guessed heights/paths spend work on
+    # unreachable origins; pending directions on existing nodes are reusable.
+    pos,parent,visited=arrays[0],arrays[3],arrays[4]
+    jobs=np.empty((2048,4));n=0;node=current
+    for ancestor in range(512):
+        if node<0:break
+        point=pos[node].copy()
+        for direction in range(4):
+            key=probe_key(point,direction)
+            if not(visited[node]&(1<<direction)) and key not in memo:
+                memo[key]=offset+n;jobs[n,:3]=point;jobs[n,3]=direction;n+=1
+        node=parent[node]
+    return jobs[:n]
+
+
+@njit
+def sample_chunk(scene,seeds,index,arrays,count,current,seedindex,bounds,slope_limit=.7,attempt_limit=10000,
+                 memo=None,records=None,metrics=None):
     pos,normal,links,parent,visited,nextxy,crouch,blocked,ground,obsh,obsa,obsb,disp,owner=arrays
     attempts=0
     while attempts<attempt_limit:
@@ -171,12 +216,23 @@ def sample_chunk(scene,seeds,index,arrays,count,current,seedindex,bounds,slope_l
         d=direction;visited[current]|=1<<d;attempts+=1
         start=pos[current].copy();target=start+DIRECTIONS[d]*25
         if (target[0]<bounds[0,0] or target[1]<bounds[0,1] or target[0]>bounds[1,0] or target[1]>bounds[1,1]):continue
-        good,point,r,height,oa,ob=move_node(scene,start,target,slope_limit)
-        if not good or r[8]&6: continue
-        if overlapped(scene,point) or embedded_displacement(scene,point): continue
+        cached=-1
+        if memo is not None:
+            metrics[0]+=1;key=probe_key(start,d)
+            if key in memo:cached=memo[key];metrics[1]+=1
+        if memo is None or cached<0:
+            good,point,r,height,oa,ob=move_node(scene,start,target,slope_limit)
+            if not good or r[8]&6:continue
+            if overlapped(scene,point) or embedded_displacement(scene,point):continue
+            norm=np.array([r[1],r[2],r[3]]);on_disp=r[7]
+        else:
+            row=records[cached]
+            if not row[0]:continue
+            point=row[1:4].copy();norm=row[4:7].copy();on_disp=bool(row[7])
+            height,oa,ob=row[8:11]
         other=find_node(index,arrays,point);new=other<0
         if new:
-            other=count;add_node(index,arrays,point,np.array([r[1],r[2],r[3]]),current,count,r[7]);count+=1
+            other=count;add_node(index,arrays,point,norm,current,count,on_disp);count+=1
         links[current,d]=other;obsh[current,d]=height;obsa[current,d]=oa;obsb[current,d]=ob
         delta=start[2]-point[2]
         if abs(delta)<50:
@@ -184,7 +240,9 @@ def sample_chunk(scene,seeds,index,arrays,count,current,seedindex,bounds,slope_l
             links[other,back]=current;visited[other]|=1<<back
             obsh[other,back]=max(0.,height+delta) if height>0 else 0.
             obsa[other,back]=25-ob;obsb[other,back]=25-oa
-        crouch_node(scene,point,crouch[other],blocked[other],ground[other])
+        if memo is None or cached<0:crouch_node(scene,point,crouch[other],blocked[other],ground[other])
+        else:
+            crouch[other]=records[cached,11:15];blocked[other]=records[cached,15:19];ground[other]=records[cached,19:23]
         if new: current=other
     return count,current,seedindex,False
 
@@ -200,18 +258,31 @@ def allocate(capacity):
 def sample(collision,seeds,bounds,progress=print,slope_limit=.7):
     arrays=allocate(262144)
     index=Dict.empty(key_type=types.UniTuple(types.int64,2),value_type=types.int64)
-    count,current,seedindex=0,-1,0
+    count,current,seedindex=0,-1,0;bounds=np.asarray(bounds,dtype=np.float64)
+    parallel=get_num_threads()>1
+    memo=Dict.empty(key_type=types.UniTuple(types.int64,4),value_type=types.int64) if parallel else None
+    records=np.empty((262144,23)) if parallel else None
+    metrics=np.zeros(3,np.int64);offset=0
     started=time.perf_counter();last=started
     while True:
-        count,current,seedindex,done=sample_chunk(collision.scene,seeds,index,arrays,count,current,seedindex,np.asarray(bounds,dtype=np.float64),slope_limit)
+        count,current,seedindex,done=sample_chunk(collision.scene,seeds,index,arrays,count,current,seedindex,bounds,slope_limit,
+                                                512 if parallel else 10000,memo,records,metrics)
         now=time.perf_counter()
         if now-last>5 or done:
-            progress(f'sampling: {count:,} nodes, {int(collision.scene[-1][0]):,} traces, seeds {seedindex}/{len(seeds)}, {now-started:.1f}s',flush=True);last=now
+            progress(f'sampling: {count:,} nodes, {trace_count(collision.scene):,} traces, seeds {seedindex}/{len(seeds)}, {now-started:.1f}s',flush=True);last=now
         if done: break
+        if parallel:
+            if offset+2048>len(records):memo.clear();offset=0
+            jobs=speculation_jobs(arrays,current,memo,offset)
+            sampling_probes(collision.scene,jobs,records,offset,bounds,slope_limit)
+            offset+=len(jobs);metrics[2]+=len(jobs)
         if count+2>=len(arrays[0]):
             grown=allocate(len(arrays[0])*2)
             for a,b in zip(grown,arrays): a[:count]=b[:count]
             arrays=grown
+    collision.sampling_speculation={'enabled':parallel,'lookup_attempts':int(metrics[0]),'cache_hits':int(metrics[1]),
+        'computed_jobs':int(metrics[2]),'lookup_hit_rate':float(metrics[1]/max(1,metrics[0])),
+        'consumed_per_computed_job':float(metrics[1]/max(1,metrics[2]))}
     return tuple(a[:count].copy() for a in arrays),index
 
 
@@ -284,32 +355,60 @@ def test_rectangle(scene,arrays,valid,node,width,height):
 
 
 @njit
-def rectangles(scene,arrays):
+def rectangle_unowned(arrays,node,width,height):
+    links,owner=arrays[2],arrays[-1];row=node
+    for y in range(height):
+        cur=row
+        for x in range(width):
+            if owner[cur]>=0:return False
+            cur=links[cur,1]
+        row=links[row,2]
+    return True
+
+
+@njit(parallel=True)
+def rectangle_candidates(scene,arrays,valid,width,height):
+    result=np.zeros(len(valid),np.bool_);owner=arrays[-1]
+    for i in prange(len(valid)):
+        if owner[i]<0 and valid[i]:result[i]=test_rectangle(scene,arrays,valid,np.int64(i),width,height)
+    return result
+
+
+@njit
+def claim_rectangles(scene,arrays,valid,width,height,candidates,boxes,corners,attrs,nareas):
     pos,normal,links,parent,visited,nextxy,crouch,blocked,ground,obsh,obsa,obsb,disp,owner=arrays
-    valid=closed_cells(arrays)
-    boxes=np.empty((len(pos),8));corners=np.empty((len(pos),4),np.int64);attrs=np.empty(len(pos),np.int64)
-    nareas=0;width=50;height=50
+    for i in range(len(pos)-1,-1,-1):
+        if owner[i]>=0 or not valid[i]:continue
+        if len(candidates):
+            if not candidates[i] or not rectangle_unowned(arrays,i,width,height):continue
+        elif not test_rectangle(scene,arrays,valid,i,width,height):continue
+        row=i;ne=-1
+        for y in range(height):
+            cur=row
+            for x in range(width):
+                owner[cur]=nareas;cur=links[cur,1]
+            if y==0:ne=cur
+            row=links[row,2]
+        sw=row;se=row
+        for x in range(width):se=links[se,1]
+        corners[nareas]=np.array([i,ne,se,sw])
+        boxes[nareas]=np.array([pos[i,0],pos[i,1],pos[se,0],pos[se,1],pos[i,2],pos[ne,2],pos[se,2],pos[sw,2]])
+        attr=1 if crouch[i,2] else 0
+        # Only corner-to-corner directions are internal to this rectangle.
+        if (obsh[i,1]>18 or obsh[i,2]>18 or obsh[ne,2]>18 or obsh[ne,3]>18
+            or obsh[se,0]>18 or obsh[se,3]>18 or obsh[sw,0]>18 or obsh[sw,1]>18):
+            attr|=8192
+        attrs[nareas]=attr;nareas+=1
+    return nareas
+
+
+def rectangles(scene,arrays):
+    valid=closed_cells(arrays);n=len(valid)
+    boxes=np.empty((n,8));corners=np.empty((n,4),np.int64);attrs=np.empty(n,np.int64)
+    nareas=0;width=50;height=50;parallel=get_num_threads()>1
     while width>0 and height>0:
-        for i in range(len(pos)-1,-1,-1):
-            if owner[i]>=0 or not valid[i]:continue
-            if not test_rectangle(scene,arrays,valid,i,width,height):continue
-            row=i;ne=-1
-            for y in range(height):
-                cur=row
-                for x in range(width):
-                    owner[cur]=nareas;cur=links[cur,1]
-                if y==0:ne=cur
-                row=links[row,2]
-            sw=row;se=row
-            for x in range(width):se=links[se,1]
-            corners[nareas]=np.array([i,ne,se,sw])
-            boxes[nareas]=np.array([pos[i,0],pos[i,1],pos[se,0],pos[se,1],pos[i,2],pos[ne,2],pos[se,2],pos[sw,2]])
-            attr=1 if crouch[i,2] else 0
-            # Only corner-to-corner directions are internal to this rectangle.
-            if (obsh[i,1]>18 or obsh[i,2]>18 or obsh[ne,2]>18 or obsh[ne,3]>18
-                or obsh[se,0]>18 or obsh[se,3]>18 or obsh[sw,0]>18 or obsh[sw,1]>18):
-                attr|=8192
-            attrs[nareas]=attr;nareas+=1
+        candidates=rectangle_candidates(scene,arrays,valid,width,height) if parallel else np.empty(0,np.bool_)
+        nareas=claim_rectangles(scene,arrays,valid,width,height,candidates,boxes,corners,attrs,nareas)
         if width>=height:width-=1
         else:height-=1
     return boxes[:nareas],corners[:nareas],attrs[:nareas],valid

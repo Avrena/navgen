@@ -16,6 +16,7 @@ from .collision import Collision
 from .hiding import compute_hiding_spots
 from .navio import read_nav,write_nav
 from .sampling import sample
+from .runtime import configure_threads, trace_count, CACHE_FINGERPRINT
 
 
 def validate_nav(nav):
@@ -44,7 +45,8 @@ def resolve_seed_file(map_path,seeds=None,progress=print):
     return None
 
 
-def generate(map_path,game=DEFAULT_GAME,out=None,seeds=None,missing_phy='skip',progress=print,slope_limit=.7):
+def generate(map_path,game=DEFAULT_GAME,out=None,seeds=None,missing_phy='skip',progress=print,slope_limit=.7,threads=None):
+    threads=configure_threads(threads)
     if not np.isfinite(slope_limit) or not 0<slope_limit<=1:raise ValueError('Slope limit must be in (0, 1]')
     total=time.perf_counter();timings={}
     start=time.perf_counter();bsp=BSP(map_path);seed_file=resolve_seed_file(bsp.path,seeds,progress)
@@ -77,7 +79,9 @@ def generate(map_path,game=DEFAULT_GAME,out=None,seeds=None,missing_phy='skip',p
     result={'map':str(bsp.path),'map_sha256':hashlib.sha256(bsp.data).hexdigest(),'out':str(target),
             'nav_sha256':hashlib.sha256(raw).hexdigest(),'bsp_size':len(bsp.data),'nav_bytes':len(raw),
             'areas':len(nav['areas']),'links':sum(len(ls) for a in nav['areas'] for ls in a['links']),
-            'nodes':len(arrays[0]),'seeds':len(seed_positions),'traces':int(collision.scene[-1][0]),
+            'nodes':len(arrays[0]),'seeds':len(seed_positions),'traces':trace_count(collision.scene),
+            'threads':threads,'compiled_cache_fingerprint':CACHE_FINGERPRINT,
+            'sampling_speculation':getattr(collision,'sampling_speculation',None),
             'missing_phy_policy':missing_phy,'slope_limit':slope_limit,'collision':collision.counts,'unresolved':collision.unresolved,
             'content_audit':collision.content_audit,
             'cleanup':graph.counts,'link_audit':graph.link_audit,'timings_seconds':timings,'analyzed':nav['analyzed'],
@@ -94,10 +98,11 @@ def main():
     parser.add_argument('map',type=Path);parser.add_argument('--game',type=Path,default=DEFAULT_GAME)
     parser.add_argument('--out',type=Path);parser.add_argument('--seeds',type=Path,help='Extra seeds; overrides automatic <map>.navseeds.txt pickup beside the BSP')
     parser.add_argument('--slope-limit',type=float,default=.7,help='Minimum walkable ground normal Z; engine default 0.7, optimizer workflow 0.55')
+    parser.add_argument('--threads',type=int,help='Numba worker threads (default: all available logical cores)')
     parser.add_argument('--missing-phy',choices=('skip','bbox'),default='skip',help='SOLID_VPHYSICS without PHY: omit collision (default), or use a transformed MDL hull box')
     args=parser.parse_args()
     try:
-        result=generate(args.map,args.game,args.out,args.seeds,args.missing_phy,slope_limit=args.slope_limit)
+        result=generate(args.map,args.game,args.out,args.seeds,args.missing_phy,slope_limit=args.slope_limit,threads=args.threads)
     except Exception as exc:
         print(f'navgen failed: {type(exc).__name__}: {exc}',file=sys.stderr,flush=True);return 1
     print(json.dumps(result,sort_keys=True),flush=True)

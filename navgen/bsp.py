@@ -16,6 +16,7 @@ import numpy as np
 import vpk
 from scipy.spatial import ConvexHull
 from .gma import GMA,content_path
+from .planes import axis_planes, edge_axes, bevel_planes
 
 DEFAULT_GAME = Path(r'C:\Program Files (x86)\Steam\steamapps\common\GarrysMod\garrysmod')
 BRUSH_MASK = 0x2400B
@@ -306,25 +307,12 @@ def convex_planes(points):
             edges=np.roll(boundary,-1,axis=0)-boundary
         elif rank==1:edges=np.array([points[-1]-points[0]])
         else:edges=np.empty((0,3))
-        for edge in edges:
-            for axis in np.eye(3):
-                n=np.cross(edge,axis);length=np.linalg.norm(n)
-                if length>1e-9:axes.append(n/length)
-        return np.array([np.r_[sign*n,np.max(points@(sign*n))] for n in axes for sign in (1,-1)])
+        axes.extend(edge_axes(edges,1e-9))
+        return axis_planes(points,np.asarray(axes))
     hull = ConvexHull(points)
-    planes = [np.r_[eq[:3],-eq[3]] for eq in hull.equations]
-    for axis in np.eye(3):
-        planes += [np.r_[axis,np.max(points@axis)],np.r_[-axis,np.max(points@-axis)]]
+    planes = np.column_stack((hull.equations[:,:3],-hull.equations[:,3]))
     edges = {tuple(sorted((int(t[a]),int(t[b])))) for t in hull.simplices for a,b in ((0,1),(1,2),(2,0))}
-    for a,b in edges:
-        edge=points[b]-points[a]
-        for axis in np.eye(3):
-            n=np.cross(edge,axis); length=np.linalg.norm(n)
-            if length<1e-8: continue
-            n/=length; d=np.dot(n,points[a]); distances=points@n-d
-            if distances.max()<1e-5: planes.append(np.r_[n,d])
-            elif distances.min()>-1e-5: planes.append(np.r_[-n,-d])
-    planes=np.asarray(planes)
+    planes=np.concatenate((planes,axis_planes(points,np.eye(3)),bevel_planes(points,np.asarray(list(edges),np.int64))))
     _,indices=np.unique(np.round(planes,6),axis=0,return_index=True)
     return planes[np.sort(indices)]
 

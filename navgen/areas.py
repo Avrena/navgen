@@ -5,7 +5,7 @@ import math
 import time
 
 import numpy as np
-from numba import njit
+from .runtime import njit, prange
 
 from .bsp import BRUSH_MASK, NPC_MASK
 from .collision import THIN_MIN, THIN_MAX, trace
@@ -33,6 +33,7 @@ def surface_normals(box):
     return a/max(np.linalg.norm(a),1e-9),b/max(np.linalg.norm(b),1e-9)
 
 
+@njit
 def portal(box,other,d):
     axis=1 if d in (0,2) else 0;tangent=1-axis
     lo=max(box[tangent],other[tangent]);hi=min(box[tangent+2],other[tangent+2])
@@ -44,22 +45,40 @@ def portal(box,other,d):
     return p,q
 
 
-def probe_portal(scene,box,other,d,slope_limit=.7,alternatives=False):
+@njit
+def portal_probe(scene,box,other,d,slope_limit=.7,alternatives=False):
     pair=portal(box,other,d)
-    if pair is None:return 'no_portal',None
+    if pair is None:return 0,np.zeros(3),np.zeros(3)
     p,q=pair;p-=DIRECTIONS[d]*.05;q+=DIRECTIONS[d]*.05;p[2]+=.05;q[2]+=.05
-    if can_traverse(scene,p,q,slope_limit):return 'midpoint',pair
-    if not alternatives:return 'unverified',pair
-    if jump_down(scene,p,q):return 'drop_probe',pair
+    if can_traverse(scene,p,q,slope_limit):return 1,p,q
+    if not alternatives:return 4,p,q
+    if jump_down(scene,p,q):return 2,p,q
     tangent=0 if d in (0,2) else 1
     lo=max(box[tangent],other[tangent]);hi=min(box[tangent+2],other[tangent+2]);inset=min(.5,(hi-lo)/4)
-    coords=[lo+inset,hi-inset,*np.arange(math.ceil(lo/25)*25,hi,25)]
+    grid=np.arange(math.ceil(lo/25)*25,hi,25)
+    coords=np.empty(2+len(grid));coords[0]=lo+inset;coords[1]=hi-inset;coords[2:]=grid
     for coordinate in coords:
         if not lo+1e-5<coordinate<hi-1e-5:continue
         a=p.copy();b=q.copy();a[tangent]=b[tangent]=coordinate
-        a[2]=height_at(box,*a[:2])+.05;b[2]=height_at(other,*b[:2])+.05
-        if can_traverse(scene,a,b,slope_limit) or jump_down(scene,a,b):return 'portal_sample',(a,b)
-    return 'unverified',pair
+        a[2]=height_at(box,a[0],a[1])+.05;b[2]=height_at(other,b[0],b[1])+.05
+        if can_traverse(scene,a,b,slope_limit) or jump_down(scene,a,b):return 3,a,b
+    return 4,p,q
+
+
+PROBE_STATUS=('no_portal','midpoint','drop_probe','portal_sample','unverified')
+
+
+def probe_portal(scene,box,other,d,slope_limit=.7,alternatives=False):
+    code,p,q=portal_probe(scene,box,other,d,slope_limit,alternatives)
+    return PROBE_STATUS[code],None if code==0 else (p,q)
+
+
+@njit(parallel=True)
+def portal_batch(scene,boxes,others,directions,slope_limit):
+    status=np.empty(len(boxes),np.int64);points=np.empty((len(boxes),2,3))
+    for i in prange(len(boxes)):
+        status[i],points[i,0],points[i,1]=portal_probe(scene,boxes[i],others[i],directions[i],slope_limit,True)
+    return status,points
 
 
 @njit
@@ -104,6 +123,13 @@ def stair_line(scene,start,end,slope_limit=.7):
         previous=z
     if abs(previous-end[2])>18:return -1
     return 1 if seen else 0
+
+
+@njit(parallel=True)
+def stair_batch(scene,starts,ends,slope_limit):
+    result=np.empty(len(starts),np.int64)
+    for i in prange(len(starts)):result[i]=stair_line(scene,starts[i],ends[i],slope_limit)
+    return result
 
 
 @dataclass
@@ -364,7 +390,7 @@ class AreaGraph:
         self.counts['square_splits']=count
 
     def mark_stairs(self):
-        count=0
+        count=0;candidates=[];starts=[];ends=[]
         for a in self.areas.values():
             b=a.box
             if max(b[2]-b[0],b[3]-b[1])<=25 or np.ptp(b[4:])<=18:continue
@@ -372,10 +398,12 @@ class AreaGraph:
             if n1@n2<.95:continue
             x0,y0,x1,y1=b[:4]+np.array([5,5,-5,-5]);xm=(x0+x1)*.5;ym=(y0+y1)*.5
             pairs=[((x0,y0),(x1,y0)),((x0,y1),(x1,y1)),((x0,y0),(x0,y1)),((x1,y0),(x1,y1)),((xm,y0),(xm,y1)),((x1,ym),(x0,ym))]
-            results=[]
+            candidates.append(a)
             for p,q in pairs:
-                start=np.array([*p,a.z(*p)]);end=np.array([*q,a.z(*q)])
-                results.append(stair_line(self.scene,start,end,self.slope_limit))
+                starts.append([*p,a.z(*p)]);ends.append([*q,a.z(*q)])
+        flags=stair_batch(self.scene,np.asarray(starts).reshape(-1,3),np.asarray(ends).reshape(-1,3),self.slope_limit)
+        for i,a in enumerate(candidates):
+            results=flags[i*6:i*6+6]
             if min(results)>=0 and max(results)>0:a.attr=STAIRS;count+=1
         self.counts['stair_areas']=count
 
@@ -583,6 +611,15 @@ class AreaGraph:
         # Failed movement probes alone cannot disprove special traversal. Ordinary
         # steps must at least retain a reciprocal sampled-node witness at this edge.
         removed=0;counts={};examples=[];evidence=[]
+        edges=[(a.id,j,d) for a in self.areas.values() for d in range(4) for j in list(a.links[d])]
+        if len(edges)<64:
+            probes=[probe_portal(self.scene,self.areas[a].box,self.areas[b].box,d,self.slope_limit,True) for a,b,d in edges]
+        else:
+            source=np.asarray([self.areas[a].box for a,b,d in edges]).reshape(-1,8)
+            target=np.asarray([self.areas[b].box for a,b,d in edges]).reshape(-1,8)
+            statuses,points=portal_batch(self.scene,source,target,np.array([d for a,b,d in edges],np.int64),self.slope_limit)
+            probes=[(PROBE_STATUS[code],None if code==0 else points[i]) for i,code in enumerate(statuses)]
+        cursor=0
         for a in list(self.areas.values()):
             for d in range(4):
                 for j in list(a.links[d]):
@@ -590,7 +627,7 @@ class AreaGraph:
                     c=counts.setdefault(kind,dict(tested=0,midpoint_failed=0,recovered=0,retained_unverified=0,removed_no_portal=0,
                                                   node_backed=0,removed_no_node_evidence=0))
                     c['tested']+=1
-                    status,pair=probe_portal(self.scene,a.box,b.box,d,self.slope_limit,True)
+                    status,pair=probes[cursor];cursor+=1
                     if status=='midpoint':continue
                     c['midpoint_failed']+=1
                     if status=='no_portal':self.disconnect(a.id,j,d);removed+=1;c['removed_no_portal']+=1

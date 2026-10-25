@@ -1,4 +1,4 @@
-# Offline Source nav generator — M5
+# Offline Source nav generator — M7
 
 Generate a Source/GMod v16, subversion 0 NAV from a compiled BSP using Python, NumPy, SciPy and Numba. It does not start the engine. See [the M5 measurements](reports/M5.md) and the preserved [M4](reports/M4.md), [M3](reports/M3.md), [M2](reports/M2.md) and [M1](reports/M1.md) reports before using its output for pathing. Map A, Map B and Map C in the reports are private test maps; A-old is an earlier revision of Map A.
 
@@ -22,7 +22,11 @@ py -3.10 -m venv .venv
 & '.\.venv\Scripts\python.exe' -I -m pip install --no-cache-dir -e .
 ```
 
-The default game directory is the GMod directory above. Without `--out`, the output is the BSP path with its suffix changed to `.nav`. Existing output is atomically replaced after validation. Use an explicit staging destination to retain an installed NAV. `bspSize` records the exact bytes of the input BSP, including its current pakfile. Phase timings and counts go to stdout; failures return a nonzero exit code. The first invocation compiles Numba functions in memory; this time is included in measurements.
+The default game directory is the GMod directory above. Without `--out`, the output is the BSP path with its suffix changed to `.nav`. Existing output is atomically replaced after validation. Use an explicit staging destination to retain an installed NAV. `bspSize` records the exact bytes of the input BSP, including its current pakfile. Phase timings and counts go to stdout; failures return a nonzero exit code.
+
+`--threads N` selects Numba worker threads; the default uses all available logical cores (or the limit set by `NUMBA_NUM_THREADS` before Python starts). Values must be positive integers within that limit. Workers evaluate pure probes; sampling and area edits retain their sequential commit order. `--threads 1` uses direct sampling and rectangle claiming. Trace counts are exact totals from separate worker counters and include unused speculative probes. `sampling_speculation` reports lookup hits and consumed/computed jobs.
+
+Numba compilation is cached under `navgen/__pycache__/numba/`, or under `NUMBA_CACHE_DIR` when set. Each cache namespace includes the complete package source hash and NumPy/SciPy/Numba/llvmlite versions, so changing an imported helper also invalidates compiled callers. Numba additionally checks its Python signature and CPU compatibility. The cache stores compiled code only. First-run compilation remains part of reported timings; subsequent processes reuse compatible compiled functions. Restart Python after editing sources; do not change source files during generation.
 
 Seeds come from all `info_player_start` origins and entities whose `targetname` matches a `trigger_teleport` target. Without `--seeds`, an existing `<bsp stem>.navseeds.txt` beside the BSP supplies extra positions. The CLI prints the selected path or that no sidecar was found. `--seeds 'D:\path with spaces\seeds.txt'` overrides that file choice; its positions still supplement BSP seeds. Each nonempty line is `x y z`; `#` starts a comment. A missing explicit file or invalid seed fails the run. An explicit empty file selects BSP seeds only even if a sidecar exists. Input files are read only. Teleport destinations seed islands; this does **not** encode teleport traversal edges in the NAV.
 

@@ -8,7 +8,7 @@ import math
 from collections import Counter
 
 import numpy as np
-from numba import njit
+from .runtime import njit, prange, trace_count
 
 from .bsp import BRUSH_MASK
 from .collision import trace
@@ -54,12 +54,12 @@ def area_spots(area,by_id):
     return spots
 
 
-@njit
+@njit(parallel=True)
 def cover_flags(scene,positions):
     """Point rays; ordinary entity filtering, not the generation walk-through filter."""
     flags=np.empty(len(positions),np.uint8);zero=np.zeros(3)
     inc=np.float32(math.pi/8)
-    for i in range(len(positions)):
+    for i in prange(len(positions)):
         start=np.empty(3);end=np.empty(3)
         start[0]=positions[i,0];start[1]=positions[i,1]
         start[2]=np.float32(positions[i,2]+np.float32(35.5))
@@ -82,7 +82,7 @@ def compute_hiding_spots(nav,collision):
     by_id={a['id']:a for a in nav['areas']}
     per_area=[area_spots(a,by_id) for a in nav['areas']]
     positions=np.asarray([p for spots in per_area for p in spots],np.float32).reshape(-1,3)
-    before=int(collision.scene[-1][0]);flags=cover_flags(collision.scene,positions)
+    before=trace_count(collision.scene);flags=cover_flags(collision.scene,positions)
     next_id=0
     for area,spots in zip(nav['areas'],per_area):
         area['hiding']=[]
@@ -94,4 +94,4 @@ def compute_hiding_spots(nav,collision):
             'exposed':int(np.count_nonzero(flags==EXPOSED)),
             'areas_with_spots':sum(bool(s) for s in per_area),
             'spots_per_area':dict(sorted(Counter(map(len,per_area)).items())),
-            'traces':int(collision.scene[-1][0])-before,'analysis_mode':'GMod nav_quicksave 2'}
+            'traces':trace_count(collision.scene)-before,'analysis_mode':'GMod nav_quicksave 2'}
