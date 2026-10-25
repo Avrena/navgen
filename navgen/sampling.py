@@ -153,48 +153,7 @@ def add_node(index,arrays,point,norm,source,count,on_disp):
 
 
 @njit
-def probe_key(point,d):
-    bits=point.view(np.int64)
-    return bits[0],bits[1],bits[2],d
-
-
-@njit
-def sampling_probe(scene,start,d,row,bounds,slope_limit):
-    row[:]=0;target=start+DIRECTIONS[d]*25
-    if target[0]<bounds[0,0] or target[1]<bounds[0,1] or target[0]>bounds[1,0] or target[1]>bounds[1,1]:return
-    good,point,r,height,oa,ob=move_node(scene,start,target,slope_limit)
-    if not good or r[8]&6:return
-    if overlapped(scene,point) or embedded_displacement(scene,point):return
-    row[0]=1;row[1:4]=point;row[4:7]=np.array([r[1],r[2],r[3]])
-    row[7]=r[7];row[8]=height;row[9]=oa;row[10]=ob
-
-
-@njit(parallel=True)
-def sampling_probes(scene,jobs,records,offset,bounds,slope_limit):
-    for i in prange(len(jobs)):
-        sampling_probe(scene,jobs[i,:3].copy(),int(jobs[i,3]),records[offset+i],bounds,slope_limit)
-
-
-@njit
-def speculation_jobs(arrays,current,memo,offset):
-    # Look ahead on the real DFS frontier. Guessed heights/paths spend work on
-    # unreachable origins; pending directions on existing nodes are reusable.
-    pos,parent,visited=arrays[0],arrays[3],arrays[4]
-    jobs=np.empty((2048,4));n=0;node=current
-    for ancestor in range(512):
-        if node<0:break
-        point=pos[node].copy()
-        for direction in range(4):
-            key=probe_key(point,direction)
-            if not(visited[node]&(1<<direction)) and key not in memo:
-                memo[key]=offset+n;jobs[n,:3]=point;jobs[n,3]=direction;n+=1
-        node=parent[node]
-    return jobs[:n]
-
-
-@njit
-def sample_chunk(scene,seeds,index,arrays,count,current,seedindex,bounds,slope_limit=.7,attempt_limit=10000,
-                 memo=None,records=None,metrics=None):
+def sample_chunk(scene,seeds,index,arrays,count,current,seedindex,bounds,slope_limit=.7,attempt_limit=10000):
     pos,normal,links,parent,visited,nextxy,crouch,blocked,ground,obsh,obsa,obsb,disp,owner=arrays
     attempts=0
     while attempts<attempt_limit:
@@ -221,23 +180,12 @@ def sample_chunk(scene,seeds,index,arrays,count,current,seedindex,bounds,slope_l
         d=direction;visited[current]|=1<<d;attempts+=1
         start=pos[current].copy();target=start+DIRECTIONS[d]*25
         if (target[0]<bounds[0,0] or target[1]<bounds[0,1] or target[0]>bounds[1,0] or target[1]>bounds[1,1]):continue
-        cached=-1
-        if memo is not None:
-            metrics[0]+=1;key=probe_key(start,d)
-            if key in memo:cached=memo[key];metrics[1]+=1
-        if memo is None or cached<0:
-            good,point,r,height,oa,ob=move_node(scene,start,target,slope_limit)
-            if not good or r[8]&6:continue
-            if overlapped(scene,point) or embedded_displacement(scene,point):continue
-            norm=np.array([r[1],r[2],r[3]]);on_disp=r[7]
-        else:
-            row=records[cached]
-            if not row[0]:continue
-            point=row[1:4].copy();norm=row[4:7].copy();on_disp=bool(row[7])
-            height,oa,ob=row[8:11]
+        good,point,r,height,oa,ob=move_node(scene,start,target,slope_limit)
+        if not good or r[8]&6:continue
+        if overlapped(scene,point) or embedded_displacement(scene,point):continue
         other=find_node(index,arrays,point);new=other<0
         if new:
-            other=count;add_node(index,arrays,point,norm,current,count,on_disp);count+=1
+            other=count;add_node(index,arrays,point,np.array([r[1],r[2],r[3]]),current,count,r[7]);count+=1
         links[current,d]=other;obsh[current,d]=height;obsa[current,d]=oa;obsb[current,d]=ob
         delta=start[2]-point[2]
         if abs(delta)<50:
@@ -261,31 +209,21 @@ def sample(collision,seeds,bounds,progress=print,slope_limit=.7):
     arrays=allocate(262144)
     index=Dict.empty(key_type=types.UniTuple(types.int64,2),value_type=types.int64)
     count,current,seedindex=0,-1,0;bounds=np.asarray(bounds,dtype=np.float64)
-    parallel=get_num_threads()>1
-    memo=Dict.empty(key_type=types.UniTuple(types.int64,4),value_type=types.int64) if parallel else None
-    records=np.empty((262144,11)) if parallel else None
-    metrics=np.zeros(3,np.int64);offset=0
     started=time.perf_counter();last=started
     while True:
-        count,current,seedindex,done=sample_chunk(collision.scene,seeds,index,arrays,count,current,seedindex,bounds,slope_limit,
-                                                512 if parallel else 10000,memo,records,metrics)
+        count,current,seedindex,done=sample_chunk(collision.scene,seeds,index,arrays,count,current,seedindex,bounds,slope_limit)
         now=time.perf_counter()
         if now-last>5 or done:
             progress(f'sampling: {count:,} nodes, {trace_count(collision.scene):,} traces, seeds {seedindex}/{len(seeds)}, {now-started:.1f}s',flush=True);last=now
         if done: break
-        if parallel:
-            if offset+2048>len(records):memo.clear();offset=0
-            jobs=speculation_jobs(arrays,current,memo,offset)
-            sampling_probes(collision.scene,jobs,records,offset,bounds,slope_limit)
-            offset+=len(jobs);metrics[2]+=len(jobs)
         if count+2>=len(arrays[0]):
             grown=allocate(len(arrays[0])*2)
             for a,b in zip(grown,arrays): a[:count]=b[:count]
             arrays=grown
     crouch_nodes(collision.scene,arrays[0][:count],arrays[6][:count],arrays[7][:count],arrays[8][:count])
-    collision.sampling_speculation={'enabled':parallel,'lookup_attempts':int(metrics[0]),'cache_hits':int(metrics[1]),
-        'computed_jobs':int(metrics[2]),'lookup_hit_rate':float(metrics[1]/max(1,metrics[0])),
-        'consumed_per_computed_job':float(metrics[1]/max(1,metrics[2])),'crouch_nodes_tested':count}
+    # Preserve the M7 diagnostic shape for consumers; there are no speculative probes.
+    collision.sampling_speculation={'enabled':False,'lookup_attempts':0,'cache_hits':0,'computed_jobs':0,
+        'lookup_hit_rate':0.,'consumed_per_computed_job':0.,'crouch_nodes_tested':count}
     return tuple(a[:count].copy() for a in arrays),index
 
 

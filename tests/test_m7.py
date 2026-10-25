@@ -19,14 +19,17 @@ from test_generation import collision, quiet
 
 class M7Tests(unittest.TestCase):
     def test_thread_determinism_and_trace_counters(self):
-        old=get_num_threads();reference=None;sampled=None
+        old=get_num_threads();reference=None;sampled=None;sampling_traces=None
         try:
             for threads in sorted({1,min(4,config.NUMBA_NUM_THREADS),config.NUMBA_NUM_THREADS}):
                 set_num_threads(threads)
                 world=collision([([0,0,-20],[800,600,0]),([100,0,0],[150,175,12]),
                                  ([200,150,60],[400,300,80]),([0,275,0],[150,300,100])])
                 arrays,index=sample(world,np.array([[50.,50.,1.]]),[[0,0,0],[800,600,100]],quiet)
-                if threads>1:self.assertGreater(world.sampling_speculation['cache_hits'],0)
+                self.assertFalse(world.sampling_speculation['enabled'])
+                traces=trace_count(world.scene)
+                if sampling_traces is None:sampling_traces=traces
+                else:self.assertEqual(traces,sampling_traces)
                 node_bytes=[a.tobytes() for a in arrays]
                 if sampled is None:sampled=node_bytes
                 else:self.assertEqual(node_bytes,sampled)
