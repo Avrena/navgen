@@ -123,19 +123,33 @@ class Area:
 class Spatial:
     def __init__(self,areas,size=128):
         self.bins=defaultdict(list);self.areas=areas;self.size=size
-        for a in areas.values():
-            b=a.box
-            for x in range(math.floor(b[0]/size),math.floor(b[2]/size)+1):
-                for y in range(math.floor(b[1]/size),math.floor(b[3]/size)+1):self.bins[x,y].append(a.id)
+        for a in areas.values():self.add(a)
 
-    def below(self,point,limit=400):
+    def add(self,a):
+        b=a.box;size=self.size
+        for x in range(math.floor(b[0]/size),math.floor(b[2]/size)+1):
+            for y in range(math.floor(b[1]/size),math.floor(b[3]/size)+1):self.bins[x,y].append(a.id)
+
+    def below(self,point,limit=400,above=.001):
         x,y,z=point;best=None;bestz=-math.inf
         for i in self.bins.get((math.floor(x/self.size),math.floor(y/self.size)),()):
             a=self.areas[i];b=a.box
             if b[0]-.001<=x<=b[2]+.001 and b[1]-.001<=y<=b[3]+.001:
                 az=a.z(x,y)
-                if z-limit<=az<=z+.001 and az>bestz:best=a;bestz=az
+                if z-limit<=az<=z+above and az>bestz:best=a;bestz=az
         return best
+
+    def contains(self,a,point):
+        # CNavArea::Contains(Vector): allow one step above the point, but no
+        # intervening area below it. XY membership alone accepts other floors.
+        x,y,z=point;b=a.box
+        if not (b[0]<=x<=b[2] and b[1]<=y<=b[3]):return False
+        az=a.z(x,y)
+        if az-18>z:return False
+        for i in self.bins.get((math.floor(x/self.size),math.floor(y/self.size)),()):
+            other=self.areas[i];b=other.box
+            if i!=a.id and b[0]<=x<=b[2] and b[1]<=y<=b[3] and az<other.z(x,y)<=z:return False
+        return True
 
 
 class AreaGraph:
@@ -191,7 +205,7 @@ class AreaGraph:
                 q=start+DIRECTIONS[d]*distance
                 tr=trace(self.scene,start,q,THIN_MIN,THIN_MAX,BRUSH_MASK,False)
                 if tr[0]<1:break
-                b=spatial.below(q)
+                b=spatial.below(q,above=5.) # CNavMesh::GetNavArea adds five units to the query height.
                 if b is None:continue
                 if b.id!=a.id:
                     dest=q.copy();dest[2]=b.z(q[0],q[1])
@@ -291,6 +305,9 @@ class AreaGraph:
                 dim=1 if d in (0,2) else 0;edge=dim if d in (0,3) else dim+2
                 if abs(new.box[edge]-box[edge])<.01 and portal(new.box,self.areas[j].box,d) is not None:self.connect(new.id,j,d,kind)
             for j,d,kind in inc:
+                # FinishSplitEdit processes incoming edges inside the outgoing
+                # loop for that side (also present in GMod x64 at 0x9f696).
+                if not any(di==(d+2)%4 for _,di,_ in out):continue
                 if j not in self.areas:continue
                 reverse=(d+2)%4;dim=1 if d in (0,2) else 0;edge=dim if reverse in (0,3) else dim+2
                 if abs(new.box[edge]-box[edge])<.01 and portal(self.areas[j].box,new.box,d) is not None:self.connect(j,new.id,d,kind)
@@ -389,16 +406,19 @@ class AreaGraph:
                 stair_here=any(self.areas[j].attr&STAIRS for j in a.links[d]);stair_neighbor|=stair_here
                 if np.count_nonzero(obsh[ids,d]>18)<(1 if stair_here else 2):continue
                 top=pos[ids,2]+obsh[ids,d]
-                if best is None or max(top)>max(best[1]):best=(d,top,float(min(obsa[ids,d])),float(max(obsb[ids,d])))
+                if best is None or max(top)>max(best[1]):best=(d,top,float(min(obsa[ids,d])))
             if best is None:continue
             if stair_neighbor:self.remove(a.id);removed+=1;continue
-            d,top,start,end=best
-            if end-start<10:start=max(0.,(start+end)*.5-5);end=min(25.,start+10);start=end-10
+            d,top,start=best
+            # SDK and GMod x64 use the start distance for BOTH bounds, then
+            # expand to ten units. EAST also falls through WEST's adjustment.
+            start=max(0.,start-5);end=min(25.,start+10);start=end-10
             axis=1 if d in (0,2) else 0;box=a.box.copy()
             if d in (1,2):box[axis+2]=box[axis]+end;box[axis]+=start
             else:box[axis]=box[axis+2]-end;box[axis+2]-=start
-            if d in (2,3):top=top[::-1]
-            box[4:]=top[[0,1,1,0]] if axis==1 else top[[0,0,1,1]]
+            if d==1:box[0]=a.box[0];box[2]=a.box[0]+end-start
+            if d in (1,2,3):top=top[::-1]
+            box[4:]=top[[0,1,1,0]]
             a.box=box;a.attr=(a.attr|NO_MERGE|OBSTACLE_TOP)&~JUMP;a.nodes=np.full(4,-1)
             for orth in ((d+1)%4,(d+3)%4):
                 for j in list(a.links[orth]):self.disconnect(a.id,j,orth)
@@ -406,13 +426,17 @@ class AreaGraph:
                     if (di+2)%4==orth:self.disconnect(j,a.id,di)
             raised+=1
         # Require an obstacle across every sampled node of the shared portal.
+        self._fence_spatial=Spatial(self.areas)
         for a in list(self.areas.values()):
-            if a.attr&(JUMP|OBSTACLE_TOP) or min(a.nodes)<0:continue
+            # This terminates the pass in both the SDK and installed GMod DLL.
+            if a.attr&(JUMP|OBSTACLE_TOP):break
+            if min(a.nodes)<0:continue
             for d in range(4):
                 for j in list(a.links[d]):
                     b=self.areas[j]
                     if b.attr&(JUMP|OBSTACLE_TOP):continue
                     if self.create_fence(a,b,d,False) or self.create_fence(a,b,d,True):created+=1
+        del self._fence_spatial
         self.counts.update(obstacle_areas_raised=raised,obstacle_areas_created=created,obstacle_areas_removed=removed)
 
     def create_fence(self,a,b,d,multi):
@@ -420,20 +444,24 @@ class AreaGraph:
         axis=1 if d in (0,2) else 0;tangent=1-axis
         lo=max(a.box[tangent],b.box[tangent]);hi=min(a.box[tangent+2],b.box[tangent+2])
         if hi<=lo:return False
+        center=np.zeros(2);center[tangent]=(lo+hi)*.5
+        center[axis]=a.box[axis] if d in (0,3) else a.box[axis+2]
+        spatial=getattr(self,'_fence_spatial',None)
+        if multi and spatial is None:spatial=Spatial(self.areas)
         node=int(a.nodes[d]);last=int(a.nodes[(d+1)%4]);edge=(d+1)%4
         heights=[];levels=[];starts=[];ends=[];seen=set()
         while node>=0 and node not in seen:
             seen.add(node);p=pos[node]
-            if lo-1<=p[tangent]<=hi+1:
+            if np.sum((p[:2]-center)**2)<((hi-lo)*.5+1)**2:
                 height=float(obsh[node,d]);start=float(obsa[node,d]);end=float(obsb[node,d])
                 if multi:
                     height=0.;other=int(links[node,d])
-                    if other>=0 and pos[other,2]-p[2]>18:
-                        q=pos[other];inside=b.box[0]<=q[0]<=b.box[2] and b.box[1]<=q[1]<=b.box[3] and abs(q[2]-b.z(q[0],q[1]))<2
+                    if not spatial.contains(b,p) and other>=0 and pos[other,2]-p[2]>18:
+                        q=pos[other];inside=spatial.contains(b,q) and abs(q[2]-b.z(q[0],q[1]))<2
                         further=int(links[other,d])
                         if not inside and further>=0:
                             r=pos[further]
-                            if b.box[0]<=r[0]<=b.box[2] and b.box[1]<=r[1]<=b.box[3] and abs(r[2]-b.z(r[0],r[1]))<2 and abs(p[2]-r[2])<=18:
+                            if spatial.contains(b,r) and abs(p[2]-r[2])<=18:
                                 height=float(q[2]-p[2]);start=20.;end=30.
                 heights.append(height);levels.append(float(p[2]));starts.append(start);ends.append(end)
             if node==last:break
@@ -449,8 +477,9 @@ class AreaGraph:
         sign=-1 if d in (0,3) else 1
         bounds=sorted((edge_coord+sign*start,edge_coord+sign*end))
         box=np.zeros(8);box[tangent]=lo;box[tangent+2]=hi;box[axis]=bounds[0];box[axis+2]=bounds[1]
-        box[4:]=top[[0,1,1,0]] if axis==1 else top[[0,0,1,1]]
+        box[4:]=top[[0,1,1,0]]
         fence=self.insert(box,a.attr|NO_MERGE|OBSTACLE_TOP,nodes=np.full(4,-1));back=(d+2)%4
+        if spatial is not None:spatial.add(fence)
         self.disconnect(a.id,b.id,d);self.connect(a.id,fence.id,d,'fence')
         self.connect(fence.id,a.id,back,'fence');self.connect(fence.id,b.id,d,'fence')
         if a.id in b.links[back]:self.disconnect(b.id,a.id,back);self.connect(b.id,fence.id,back,'fence')
@@ -464,8 +493,8 @@ class AreaGraph:
             for b in fences[k+1:]:
                 if np.min(np.minimum(a.box[2:4],b.box[2:4])-np.maximum(a.box[:2],b.box[:2]))<=0:continue
                 # SDK obstacle cleanup uses XY overlap; it does not form a union.
-                if np.all(a.box[:2]<=b.box[:2]) and np.all(a.box[2:4]>=b.box[2:4]):remove.add(b.id)
-                elif np.all(b.box[:2]<=a.box[:2]) and np.all(b.box[2:4]>=a.box[2:4]):remove.add(a.id)
+                if np.all(a.box[:2]<=b.box[:2]) and np.all(a.box[2:4]>=b.box[2:4]) and a.box[4]<=b.box[4] and a.box[6]>=b.box[6]:remove.add(b.id)
+                elif np.all(b.box[:2]<=a.box[:2]) and np.all(b.box[2:4]>=a.box[2:4]) and b.box[4]<=a.box[4] and b.box[6]>=a.box[6]:remove.add(a.id)
                 else:remove.add(b.id if np.prod(a.box[2:4]-a.box[:2])>np.prod(b.box[2:4]-b.box[:2]) else a.id)
         for i in sorted(remove):self.remove(i)
         self.counts['overlapping_or_steep_obstacle_areas_removed']=len(remove)
