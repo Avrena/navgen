@@ -93,6 +93,10 @@ def trace(scene, start, end, mins, maxs, mask=BRUSH_MASK, walk=True, brute=False
                     surf=pflags[plane]
                 elif isdisp:
                     nx,ny,nz=front[bid,0],front[bid,1],front[bid,2]
+            # Fractions cannot improve on zero, ties keep the first hit, and
+            # both accumulated solid flags are already true.
+            if best==0. and ss and als:
+                return best,nx,ny,nz,ss,als,contents,disp,surf,hit
     return best,nx,ny,nz,ss,als,contents,disp,surf,hit
 
 
@@ -104,6 +108,56 @@ def batch_trace(scene,starts,ends,mins,maxs,mask=BRUSH_MASK,walk=True,brute=Fals
         out[i,0]=r[0];out[i,1]=r[1];out[i,2]=r[2];out[i,3]=r[3]
         out[i,4]=r[4];out[i,5]=r[5];out[i,6]=r[6];out[i,7]=r[7];out[i,8]=r[8];out[i,9]=r[9]
     return out
+
+
+@njit
+def blocked_vertical_span(scene,start,end,mins,maxs,hit,limit):
+    """Prove a contiguous range blocked by one convex, without epsilon guesses.
+
+    A fixed interior point of the expanded convex witnesses a collision along
+    every translated segment. Only strictly interior witnesses are accepted;
+    touching, one-sided terrain and degenerate intersections fall back to trace.
+    """
+    planes,pflags,first,count,lo,hi,meta,front,blo,bhi,escape,leaf,order,stats=scene
+    if hit<0 or meta[hit,5]==2:return 0
+    enter=0.;leave=1.
+    for k in range(first[hit],first[hit]+count[hit]):
+        a=-planes[k,3];b=a
+        for axis in range(3):
+            n=planes[k,axis];offset=mins[axis] if n>=0 else maxs[axis]
+            a+=n*(start[axis]+offset);b+=n*(end[axis]+offset)
+        if a>0 and b>=a:return 0
+        if a<=0 and b<=0:continue
+        if a>b:enter=max(enter,a/(a-b))
+        else:leave=min(leave,a/(a-b))
+    if leave-enter<1e-8:return 0
+    witness=start+(end-start)*((enter+leave)*.5)
+    # Saved PHY bounds can be tighter than the convex planes. The original
+    # broad phase is authoritative too, including its epsilon padding.
+    span=min(float(limit),hi[hit,2]-(min(start[2],end[2])+mins[2]-EPS)-1e-7)
+    for k in range(first[hit],first[hit]+count[hit]):
+        distance=-planes[k,3]
+        for axis in range(3):
+            n=planes[k,axis];offset=mins[axis] if n>=0 else maxs[axis]
+            distance+=n*(witness[axis]+offset)
+        # clip moves leaving fractions by EPS too. Merely being physically
+        # inside a thin corner does not prove the epsilon-adjusted intervals
+        # overlap; the witness must lie at least EPS inside every plane.
+        if distance>=-EPS-1e-7:return 0
+        if planes[k,2]>0:span=min(span,(-distance-EPS-1e-7)/planes[k,2])
+    result=max(0,int(math.floor(span)))
+    if result==0:return 0
+    if min(start[2]+result,end[2]+result)+mins[2]-EPS>hi[hit,2]:return 0
+    witness[2]+=result
+    # Recheck the upper endpoint with the same summation as clip. Convexity
+    # proves every intermediate height; this check contains division rounding.
+    for k in range(first[hit],first[hit]+count[hit]):
+        distance=-planes[k,3]
+        for axis in range(3):
+            n=planes[k,axis];offset=mins[axis] if n>=0 else maxs[axis]
+            distance+=n*(witness[axis]+offset)
+        if distance>=-EPS-1e-7:return 0
+    return result
 
 
 def triangle_planes(points):

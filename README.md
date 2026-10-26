@@ -1,10 +1,12 @@
-# Offline Source nav generator — M7
+# Offline Source nav generator — M8
 
 Generate a Source/GMod v16, subversion 0 NAV from a compiled BSP using Python, NumPy, SciPy and Numba. It does not start the engine. See [the M7 measurements](reports/M7.md), [M6](reports/M6.md), and the preserved [M5](reports/M5.md), [M4](reports/M4.md), [M3](reports/M3.md), [M2](reports/M2.md) and [M1](reports/M1.md) reports before using its output for pathing. Map A, Map B and Map C in the reports are private test maps; A-old is an earlier revision of Map A.
 
 M5 fixes displacement collision orientation. The SDK's fixed grid indices determine the front, including for `side=1` faces and triangles folded away from their base plane. The previous face-normal alignment could hide walkable terrain and expose floors underneath. The port now swaps the SDK index order once to match its collision kernel's cross-product convention; it preserves triangle order, tags and start-corner rotation.
 
 M7 separates deterministic performance work from the SDK crouch correction. Stage A is preserved under `work/m7/stage-a/`. Stage B evaluates crouch/blocked/ground values once per node at its stored position after sampling; crouch and blocked flags remain sticky, matching `CheckCrouch` on static collision. Incoming step heights no longer overwrite an existing node's corner flags. This correction can change area partitions and NAV bytes; it is separate from thread determinism.
+
+M8's SDK sampler defers reverse obstacle traces until their span survives, skips a range of blocked heights only when a strict convex-interior witness proves every height blocked, and ends collision traversal once the hit fraction and solid flags cannot change. Touching and one-sided terrain cases retain the original scan. These shortcuts preserve node arrays and NAV bytes; reduced trace counts are expected. The original algorithms remain in differential tests, and Part 1's source snapshot is saved separately under `work/m8/part1/`.
 
 ## Run
 

@@ -6,7 +6,7 @@ from numba import types
 from numba.typed import Dict
 from .runtime import njit, prange, get_num_threads, trace_count
 
-from .collision import BRUSH_MASK, THIN_MIN, THIN_MAX, trace
+from .collision import BRUSH_MASK, THIN_MIN, THIN_MAX, blocked_vertical_span, trace
 
 DIRECTIONS = np.array([[0.,-1.,0.],[1.,0.,0.],[0.,1.,0.],[-1.,0.,0.]])
 CORNERS = np.array([[-1.,-1.,0.],[1.,-1.,0.],[1.,1.,0.],[-1.,1.,0.]])
@@ -52,7 +52,9 @@ def move_node(scene,origin,target,slope_limit=.7):
     good,point,r=adjacent(scene,origin,target,slope_limit)
     height=0.;obs_start=0.;obs_end=25.
     if not good:
-        for height_i in range(18,201):
+        last_fraction=1.
+        height_i=18
+        while height_i<=200:
             start=origin.copy();end=target.copy();start[2]+=height_i;end[2]+=height_i
             tr=trace(scene,start,end,THIN_MIN,THIN_MAX)
             if not tr[4] and tr[0]==1:
@@ -62,16 +64,26 @@ def move_node(scene,origin,target,slope_limit=.7):
                 ceiling=trace(scene,origin,up,THIN_MIN,THIN_MAX)
                 if ceiling[0]<1: break
                 good=True;height=float(height_i);break
-            else:
-                a=endpoint(start,end,tr)
-                reverse=trace(scene,end,start,THIN_MIN,THIN_MAX)
-                if not reverse[4] and reverse[0]<1:
-                    b=endpoint(end,start,reverse)
-                    obs_start=np.sqrt(np.sum((a-start)**2))
-                    obs_end=np.sqrt(np.sum((b-start)**2))
-                    if obs_end==0: obs_end=25.
+            skip=blocked_vertical_span(scene,start,end,THIN_MIN,THIN_MAX,tr[9],200-height_i)
+            last_fraction=tr[0] if skip==0 else -1.
+            height_i+=skip+1
     if height<18 or point[2]-origin[2]>height-2:
         height=0.;obs_start=0.;obs_end=25.
+    else:
+        # Only the last eligible reverse trace survives the SDK's ascending
+        # scan. Failed moves and ordinary steps discard the entire span.
+        for h in range(int(height)-1,17,-1):
+            start=origin.copy();end=target.copy();start[2]+=h;end[2]+=h
+            reverse=trace(scene,end,start,THIN_MIN,THIN_MAX)
+            if not reverse[4] and reverse[0]<1:
+                fraction=last_fraction
+                if h!=int(height)-1 or fraction<0:
+                    fraction=trace(scene,start,end,THIN_MIN,THIN_MAX)[0]
+                a=start+(end-start)*fraction;b=endpoint(end,start,reverse)
+                obs_start=np.sqrt(np.sum((a-start)**2))
+                obs_end=np.sqrt(np.sum((b-start)**2))
+                if obs_end==0:obs_end=25.
+                break
     return good,point,r,height,obs_start,obs_end
 
 
