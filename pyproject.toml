@@ -7,6 +7,7 @@ name = "source-navgen"
 version = "0.1.0"
 description = "Offline Source v16 navigation mesh generation"
 requires-python = ">=3.10"
+license = {text = "MIT"}
 dependencies = ["numpy==2.2.6", "scipy==1.15.3", "numba==0.63.1", "vpk==1.4.0"]
 
 [tool.setuptools]

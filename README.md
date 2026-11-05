@@ -94,3 +94,7 @@ The stock NAV round-trip fixtures are read from the local GMod `maps` directory;
 Hiding analysis follows GMod's `nav_quicksave 2` generation mode: reciprocal neighbor extents select corners; positions use the SDK 12.5-unit inset/fallbacks and retain corner Z; spots closer than 30 units within one area are suppressed. Cover uses point rays with `MASK_NPCSOLID_BRUSHONLY` and ordinary entity filtering, including brushes ignored by walking generation. IDs start at zero in saved area order. The generator writes `analyzed=1`, with IN_COVER (1) or EXPOSED (8) spots. This flag records completion of that analysis mode, not validation of native routes.
 
 Sniper/encounter analysis is skipped by the engine at nonzero `nav_quicksave`; visibility is skipped at 2. GMod's occupy-time implementation clears both values, and its analysis state skips lighting. Output retains light values 1, occupy times 0, and no visibility, encounters or places. Both profiles leave ladders empty unless --ladders is supplied. Moving entities, Lua-spawned collision, gamemode traversal and teleport links require later runtime integration. M9 generation and audits remain offline. The path model is compared with previously recorded native lengths; new meshes still require native loading and route acceptance.
+
+## Licence
+
+navgen is released under the MIT licence; see [LICENSE](LICENSE). The vendored sources under `cpp/third_party/` keep their own licences, listed in [cpp/third_party/README.md](cpp/third_party/README.md).
