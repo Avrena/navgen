@@ -56,7 +56,7 @@ Do not enable fast-math, contraction, reassociation or floating-point flags that
 
 `pyset.hpp` implements CPython 3.10's 64-bit integer/tuple hashes, table probing, resize policy, tombstones, copy and set operations. It is used wherever set iteration can affect a plane, graph edit, or diagnostic example. Sorted traversals and insertion-ordered traversals retain their Python order. Worker loops compute independent results; graph mutations and rectangle claims commit sequentially. SDK sampling remains a serial DFS.
 
-The only Python reference change replaces the SVD basis of rank-deficient convex pieces with deterministic vector construction. Rank-two, rank-one and rank-zero inputs have bitwise differential tests. Large production maps and the MSVC build still require the qualification described in the report.
+The only Python reference change replaces the SVD basis of rank-deficient convex pieces with deterministic vector construction. Rank-two, rank-one and rank-zero inputs have bitwise differential tests. The report records the MSVC and large-map qualification results.
 
 ## Tests and stage comparison
 
@@ -89,7 +89,7 @@ On Linux, the worker-launch failure regression injects a failed second thread cr
 python cpp/tests/test_thread_failure.py --test-binary cpp/build/navgen_sampling_areas_tests
 ```
 
-For the authorised flat-piece differential test, set `NAVGEN_CPP_PROBE` to the absolute path of `navgen_module_probe` and run:
+For the flat-piece differential test, set `NAVGEN_CPP_PROBE` to the absolute path of `navgen_module_probe` and run:
 
 ```sh
 python -I -m unittest discover -s tests -p test_flat_convex.py -v
