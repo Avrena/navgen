@@ -86,7 +86,7 @@ fs::path path_argument(const std::string& value) {return path_from_utf8(value.em
 }
 int run_main(int argc,char** argv) {
     using namespace navgen;std::setlocale(LC_ALL,"C");std::fesetround(FE_TONEAREST);
-    Options options;options.game=DEFAULT_GAME;options.threads=logical_cores();
+    Options options;options.game=find_game();options.threads=logical_cores();
     try {
         const auto parsed=arguments(argc,argv);bool has_map=false;std::vector<std::string> extra;
         for(std::size_t i=0;i<parsed.size();++i) {

@@ -10,7 +10,10 @@
 namespace navgen {
 inline constexpr int64_t BRUSH_MASK = 0x2400B;
 inline constexpr int64_t NPC_MASK = BRUSH_MASK | 0x2000000;
-inline constexpr const char* DEFAULT_GAME = R"(C:\Program Files (x86)\Steam\steamapps\common\GarrysMod\garrysmod)";
+// A Steam root followed by the library folders listed in its libraryfolders.vdf.
+std::vector<std::filesystem::path> steam_libraries(const std::filesystem::path& root);
+// The first garrysmod directory in the Steam libraries, else the default Steam location.
+std::filesystem::path find_game();
 using Entity = nlohmann::ordered_map<std::string, std::string>;
 using M3 = std::array<V3, 3>;
 V3 vector(const std::string& value, V3 fallback={0.,0.,0.});

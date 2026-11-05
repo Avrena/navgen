@@ -6,6 +6,7 @@ import hashlib
 import itertools
 import lzma
 import math
+import os
 import re
 import struct
 import zipfile
@@ -18,7 +19,32 @@ from scipy.spatial import ConvexHull
 from .gma import GMA,content_path
 from .planes import axis_planes, edge_axes, bevel_planes
 
-DEFAULT_GAME = Path(r'C:\Program Files (x86)\Steam\steamapps\common\GarrysMod\garrysmod')
+
+def steam_libraries(root):
+    """A Steam root followed by the library folders listed in its libraryfolders.vdf."""
+    try:text=(root/'steamapps/libraryfolders.vdf').read_text(encoding='utf-8',errors='replace')
+    except OSError:return [root]
+    return [root,*(Path(re.sub(r'\\(.)',r'\1',value)) for value in re.findall(r'"path"\s+"((?:[^"\\]|\\.)*)"',text,re.I))]
+
+
+def find_game():
+    """The first garrysmod directory in the Steam libraries, else the default Steam location."""
+    if os.name=='nt':
+        roots=[]
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Valve\Steam') as key:
+                roots.append(Path(winreg.QueryValueEx(key,'SteamPath')[0]))
+        except OSError:pass
+        roots.append(Path(r'C:\Program Files (x86)\Steam'))
+        fallback=roots[-1]
+    else:
+        roots=[Path.home()/'.local/share/Steam',Path.home()/'.steam/steam'];fallback=roots[0]
+    games=[library/'steamapps/common/GarrysMod/garrysmod' for root in roots for library in steam_libraries(root)]
+    return next((game for game in games if game.is_dir()),fallback/'steamapps/common/GarrysMod/garrysmod')
+
+
+DEFAULT_GAME = find_game()
 BRUSH_MASK = 0x2400B
 NPC_MASK = BRUSH_MASK | 0x2000000
 BRUSH_SIDE_DTYPE = np.dtype([('plane','<u2'),('tex','<i2'),('disp','<i2'),('bevel','u1'),('thin','u1')])

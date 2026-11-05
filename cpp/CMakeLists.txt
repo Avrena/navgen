@@ -33,7 +33,7 @@ add_library(navgen_lzma STATIC third_party/lzma/LzmaDec.c)
 target_include_directories(navgen_lzma PUBLIC third_party/lzma)
 add_library(navgen_core STATIC src/common.cpp src/navio.cpp src/bsp.cpp src/gma.cpp src/planes.cpp
     src/collision.cpp src/sampling.cpp src/areas.cpp src/hiding.cpp src/merge.cpp
-    src/discovery.cpp src/ladders.cpp src/geometry.cpp)
+    src/discovery.cpp src/ladders.cpp src/geometry.cpp src/steam.cpp)
 target_include_directories(navgen_core PUBLIC src third_party/json/include)
 target_link_libraries(navgen_core PUBLIC navgen_qhull navgen_zlib navgen_lzma Threads::Threads)
 file(GLOB BUILD_ID_SOURCES CONFIGURE_DEPENDS src/*.hpp src/*.cpp)

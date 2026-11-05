@@ -8,7 +8,7 @@ import zlib
 import numpy as np
 
 from navgen.areas import AreaGraph,JUMP,OBSTACLE_TOP,probe_portal
-from navgen.bsp import BRUSH_SIDE_DTYPE,Content,convex_planes
+from navgen.bsp import BRUSH_SIDE_DTYPE,Content,convex_planes,steam_libraries
 from navgen.collision import Collision,SceneBuilder,entity_rules
 from navgen.gma import GMA
 from navgen.sampling import adjacent,overlapped,allocate
@@ -72,6 +72,15 @@ class M2Tests(unittest.TestCase):
             self.assertEqual(len(content.conflicts),1)
             self.assertEqual(content.conflicts[0]['path'],'models/test.mdl')
             self.assertEqual(content.conflicts[0]['different_sources'][0]['source'],str(gma))
+
+    def test_steam_library_list(self):
+        WORK.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=WORK) as temp:
+            root=Path(temp);self.assertEqual(steam_libraries(root),[root])
+            (root/'steamapps').mkdir()
+            (root/'steamapps/libraryfolders.vdf').write_text('"libraryfolders"\n{\n\t"0"\n\t{\n\t\t"path"\t\t"E:\\\\Games\\\\Steam"\n'
+                '\t\t"apps"\n\t\t{\n\t\t\t"4000"\t\t"1"\n\t\t}\n\t}\n\t"1"\n\t{\n\t\t"PATH"  "F:\\\\Lib \\"x\\""\n\t}\n}\n',encoding='utf-8')
+            self.assertEqual(steam_libraries(root),[root,Path('E:\\Games\\Steam'),Path('F:\\Lib "x"')])
 
     def test_brush_side_byte_fields(self):
         side=np.frombuffer(struct.pack('<HhhBB',7,2,-1,0,1),dtype=BRUSH_SIDE_DTYPE)[0]

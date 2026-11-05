@@ -42,7 +42,7 @@ The Hammer++ compile-step command is unchanged apart from selecting the native e
 navgen "$path\$file.bsp" --game "$gamedir" --slope-limit 0.55 --profile merged --seeds <file> --out "$path\$file.nav"
 ```
 
-Defaults match Python: SDK profile, slope limit `0.7`, all logical cores, no additional entity discovery, no ladders, and missing-PHY policy `skip`. The existing Python `DEFAULT_GAME` is retained; pass `--game` explicitly for portable use. Threads must be between one and the logical-core count, and the slope limit must be finite and in `(0, 1]`.
+Defaults match Python: SDK profile, slope limit `0.7`, all logical cores, no additional entity discovery, no ladders, and missing-PHY policy `skip`. Without `--game`, both implementations locate Garry's Mod through the same Steam library search (see the main README). Threads must be between one and the logical-core count, and the slope limit must be finite and in `(0, 1]`.
 
 The default output replaces the BSP suffix with `.nav`. A `<map>.navseeds.txt` sidecar is discovered automatically; `--seeds` overrides the sidecar choice, and an explicit empty seed file uses BSP seeds alone. Paths containing spaces work when quoted. Generation refuses to overwrite the BSP or the selected seed file. It validates the NAV and its binary read/write round trip before replacing the output through a temporary file in the destination directory.
 
