@@ -294,12 +294,29 @@ def parse_phy(data):
     return pieces
 
 
+def _flat_basis(centered,rank):
+    """Canonical flat-piece axes using only small-vector arithmetic."""
+    if rank==0:return np.eye(3)
+    best=np.zeros(3);score=-1.
+    candidates=(np.cross(centered[i],centered[j]) for i in range(len(centered))
+                for j in range(i+1,len(centered))) if rank==2 else iter(centered)
+    for candidate in candidates:
+        length2=np.dot(candidate,candidate)
+        if length2>score:best=candidate.copy();score=length2
+    if best[int(np.argmax(np.abs(best)))]<0:best=-best
+    best/=np.sqrt(np.dot(best,best))
+    axis=np.eye(3)[int(np.argmin(np.abs(best)))]
+    first=np.cross(axis,best);first/=np.sqrt(np.dot(first,first))
+    second=np.cross(best,first)
+    return np.array([first,second,best]) if rank==2 else np.array([best,first,second])
+
+
 def convex_planes(points):
     centered=points-points[0]
     rank=np.linalg.matrix_rank(centered,tol=1e-7)
     if rank<3:
         # VPHY terminal ledges can be flat triangles rather than solid tetrahedra.
-        _,_,basis=np.linalg.svd(centered,full_matrices=True)
+        basis=_flat_basis(centered,rank)
         axes=[*np.eye(3),*basis[rank:]]
         if rank==2:
             hull=ConvexHull(centered@basis[:2].T)
