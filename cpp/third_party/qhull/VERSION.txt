@@ -1,0 +1,3 @@
+Qhull 2019.1 reentrant sources, copied verbatim from scipy/scipy tag v1.15.3:
+https://github.com/scipy/scipy/tree/v1.15.3/scipy/spatial/qhull_src
+Licence: COPYING.txt. See README.scipy for the SciPy vendor version.

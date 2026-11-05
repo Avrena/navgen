@@ -1,0 +1,5 @@
+7-Zip 24.09 LZMA decoder sources.
+Upstream commit: e5431fa6f5505e385c6f9367260717e9c47dc2ee
+Source: https://github.com/ip7z/7zip/tree/24.09/C
+Files: LzmaDec.c, LzmaDec.h, 7zTypes.h, Precomp.h, Compiler.h.
+Licence: public domain; see LICENSE.txt and original file headers.

@@ -1,0 +1,4 @@
+LZMA SDK decoder, 7-Zip 24.09.
+The LZMA SDK is placed in the public domain.
+Source: https://github.com/ip7z/7zip/tree/24.09/C
+See file headers for individual authorship and public-domain notices.

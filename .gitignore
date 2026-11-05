@@ -4,3 +4,8 @@ reports/measurements/
 __pycache__/
 *.egg-info/
 *.pyc
+cpp/build*/
+*.nav
+*.bsp
+*.mdl
+*.phy

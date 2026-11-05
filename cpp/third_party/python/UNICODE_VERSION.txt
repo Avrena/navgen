@@ -1,0 +1,5 @@
+Unicode 13.0.0 tables from CPython 3.10.11.
+Upstream commit: 7d4cc5aa854fdea4d01a5b9c59e37c6e62f1103d
+Source: https://github.com/python/cpython/blob/v3.10.11/Objects/unicodetype_db.h
+The table is copied verbatim. Full lowercase, final sigma, decimal and whitespace helpers follow the corresponding CPython unicodectype.c and unicodeobject.c code. The CP437 mapping follows Lib/encodings/cp437.py in the same release.
+Licences: LICENSE (Python), UNICODE_LICENSE (Unicode data).
