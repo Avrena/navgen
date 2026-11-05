@@ -183,14 +183,35 @@ The native serial sampling phase remains the largest cost, followed by rectangle
 The retained `cpp/tests/benchmark.py` driver records every invocation's phase timings, wall time, peak RSS and NAV hash before calculating medians. It preserves virtual-environment interpreter paths instead of resolving their symlinks to a different Python environment.
 
 
-## Remaining qualification and residual risks
+## Windows qualification
 
-There is no known NAV or required-result divergence in the supplied fixtures or retained differential suites. That evidence does not establish parity for every unseen BSP. The following work remains:
+The production build used MSVC 19.51 (Visual Studio 2026, toolset v145) with `/fp:precise`, `/arch:AVX2` and the static CRT, on a 16-thread AVX-512 desktop. The reference was CPython 3.10.11 with its default OpenBLAS kernel selection (SkylakeX).
 
-* Build and run the branch with MSVC 2022 x64. Windows is the production gate; no Windows compiler or runtime execution was available in this qualification. The source was reviewed for Windows CRT, wide paths, threading and floating-point flags, but that review cannot replace the build and run.
-* Run the eleven-case matrix on Windows at one, two and the available maximum thread count. Repeat `python cpp/tests/probe_blas.py --report BLAS_RESULTS.json` against the target OpenBLAS build with `OPENBLAS_CORETYPE=SkylakeX`.
-* Run both large production BSPs, with their production seeds/options, and compare stage dumps if a hash differs. Their larger object counts, area counts and orientations were not available here. Measure the Stage 0 effect on their flat pieces and repeat the in-game route check if their NAV bytes change.
+| Gate | Result |
+| --- | --- |
+| Eleven-case matrix at 1, 2 and 16 threads | 33/33 NAV and required-JSON MATCH |
+| `probe_blas.py` | Flat projection follows `dot3` at every measured size of three or more rows; signed-zero results are positive |
+| Flat-piece bitwise test against the MSVC module probe | PASS |
+| Python suite | 80 tests PASS |
+| Large production map, SDK profile, slope 0.55 (17,298 areas) | Native, Stage 0 Python and pre-Stage 0 Python byte-identical; native identical at 1 and 16 threads |
+| Same map, merged profile, slope 0.55, seed file (29,036 areas) | Same three-way byte identity; native identical at 1 and 16 threads |
+
+The map is a 164 MB BSP with 16,938 solid and 84 rank-two convex pieces and 64 rotated brush entities. Stage 0 did not change its NAV bytes. Wall times at 16 threads with a warm Numba cache:
+
+| Workload | Python | Native | Speed-up |
+| --- | ---: | ---: | ---: |
+| SDK, slope 0.55 | 48.1 s | 10.9 s | 4.4× |
+| Merged, slope 0.55, seed file | 72.2 s | 16.2 s | 4.5× |
+
+Collision building (4.3 s) is now the largest native phase, followed by sampling (2.9 s in the SDK run).
+
+On Windows, `str(Path)` uses backslashes and drops `.` and repeated separators. Content-source labels, GMA error text, and the `map`, `out` and seed-file paths now use `python_path_text`, which reproduces that form. Before this change, `content_audit.selected_reads` differed whenever `--game` was given with forward slashes.
+
+## Residual risks
+
+There is no known NAV or required-result divergence in the supplied fixtures, the retained differential suites or the Windows production-map runs. That evidence does not establish parity for every unseen BSP.
+
 * Watch rank decisions near `1e-7`, LU determinant decisions near `1e-9`, six-decimal brush-vertex rounding boundaries, and rare cross-platform transcendental differences. No failing example was found in the exercised cases, so Python behaviour was not changed to hide a discrepancy.
-* Measure the performance goal on the large maps and a 16-thread production machine. Stock-map results here cannot establish the large-map target.
+* Large-map evidence covers one production map. Other maps may reach rank, rounding or library boundaries not exercised here; compare stage dumps if a hash differs.
 
 Written ladders, `side=1` displacements, missing PHYs, archive sources, compressed BSP/ZIP data and varied prop rotations are covered by synthetic differential tests. They still need integration coverage with real maps and content. The optional seed-helper CLI was not ported; existing seed files remain accepted by the generator.

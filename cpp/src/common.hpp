@@ -39,6 +39,19 @@ using Bytes = std::vector<std::uint8_t>;
 namespace fs = std::filesystem;
 inline fs::path path_from_utf8(std::string_view text){return fs::path(std::u8string(text.begin(),text.end()));}
 inline std::string path_utf8(const fs::path& path){auto text=path.u8string();return std::string(text.begin(),text.end());}
+// str(pathlib.Path): native separators, without "." parts or repeated/trailing separators.
+inline std::string python_path_text(const fs::path& path){
+#ifdef _WIN32
+    constexpr char sep='\\';
+#else
+    constexpr char sep='/';
+#endif
+    auto text=path_utf8(path.root_name());std::replace(text.begin(),text.end(),'/',sep);
+    if(path.has_root_directory())text+=sep;
+    bool first=true;
+    for(const auto& part:path.relative_path()){auto name=path_utf8(part);if(name.empty()||name==".")continue;if(!first)text+=sep;text+=name;first=false;}
+    return text.empty()?".":text;
+}
 
 struct Error : std::runtime_error {
     std::string kind;

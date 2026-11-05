@@ -2,14 +2,14 @@
 
 This C++20 implementation generates Source/Garry's Mod NAV v16, subversion 0 files directly from a compiled BSP. It preserves the Python generator's processing order and numerical behaviour. Python is needed only for the reference and differential tests; the executable does not start Python, download assets, or require a game process.
 
-The production target is MSVC 2022 x64. GCC on Linux is also supported. The dependencies are vendored, including the exact Qhull sources from SciPy 1.15.3. No dependency is downloaded during configuration or at runtime. See `third_party/README.md` for versions, source provenance and licences, and `../reports/CPP.md` for measured parity, performance and remaining qualification work.
+The production target is MSVC x64 (Visual Studio 2022 or 2026). GCC on Linux is also supported. The dependencies are vendored, including the exact Qhull sources from SciPy 1.15.3. No dependency is downloaded during configuration or at runtime. See `third_party/README.md` for versions, source provenance and licences, and `../reports/CPP.md` for measured parity, performance and remaining qualification work.
 
 ## Build
 
-Use CMake 3.21 or newer and a C++20 compiler. From the repository root, in a Visual Studio 2022 developer shell:
+Use CMake 3.21 or newer and a C++20 compiler. From the repository root, name the installed Visual Studio's generator: `"Visual Studio 18 2026"` (toolset v145) or `"Visual Studio 17 2022"` (v143). A generator without its toolset fails with MSB8020.
 
 ```powershell
-cmake -S cpp -B cpp/build -G "Visual Studio 17 2022" -A x64
+cmake -S cpp -B cpp/build -G "Visual Studio 18 2026" -A x64
 cmake --build cpp/build --config Release --parallel
 ctest --test-dir cpp/build -C Release --output-on-failure
 ```

@@ -24,8 +24,8 @@ void append_utf8(std::string& out,uint32_t p){
     else message<<"bytes in position "<<start<<'-'<<end-1;
     message<<": "<<reason;throw Error(message.str(),"UnicodeDecodeError");
 }
-uint64_t read_int(std::istream& f,size_t n,const std::filesystem::path& p){uint64_t v=0;for(size_t i=0;i<n;i++){int c=f.get();if(c==EOF)throw Error("Truncated GMA table: "+path_utf8(p));v|=uint64_t(uint8_t(c))<<(i*8);}return v;}
-std::string cstr(std::istream& f,const std::filesystem::path& p){std::string s;while(s.size()<1048576){int c=f.get();if(c==0)return s;if(c==EOF)throw Error("Truncated GMA string: "+path_utf8(p));s.push_back(static_cast<char>(c));}throw Error("Oversized GMA string: "+path_utf8(p));}
+uint64_t read_int(std::istream& f,size_t n,const std::filesystem::path& p){uint64_t v=0;for(size_t i=0;i<n;i++){int c=f.get();if(c==EOF)throw Error("Truncated GMA table: "+python_path_text(p));v|=uint64_t(uint8_t(c))<<(i*8);}return v;}
+std::string cstr(std::istream& f,const std::filesystem::path& p){std::string s;while(s.size()<1048576){int c=f.get();if(c==0)return s;if(c==EOF)throw Error("Truncated GMA string: "+python_path_text(p));s.push_back(static_cast<char>(c));}throw Error("Oversized GMA string: "+python_path_text(p));}
 }
 std::vector<uint32_t> unicode_codepoints(std::string_view text){
     std::vector<uint32_t> out;out.reserve(text.size());size_t i=0;
@@ -83,23 +83,23 @@ std::string content_path(std::string name){
     if(bad)throw Error("Invalid content path: '"+name+"'");return name;
 }
 GMA::GMA(const std::filesystem::path& p):path(p){
-    auto size=std::filesystem::file_size(path);std::ifstream f(path,std::ios::binary);if(!f)throw Error("Cannot open GMA: "+path_utf8(path));
-    char signature[4]{};f.read(signature,4);if(f.gcount()!=4||std::string(signature,4)!="GMAD")throw Error("Unsupported GMA signature: "+path_utf8(path));
-    auto version=read_int(f,1,path);if(version<1||version>3)throw Error("Unsupported GMA version "+std::to_string(version)+": "+path_utf8(path));
+    auto size=std::filesystem::file_size(path);std::ifstream f(path,std::ios::binary);if(!f)throw Error("Cannot open GMA: "+python_path_text(path));
+    char signature[4]{};f.read(signature,4);if(f.gcount()!=4||std::string(signature,4)!="GMAD")throw Error("Unsupported GMA signature: "+python_path_text(path));
+    auto version=read_int(f,1,path);if(version<1||version>3)throw Error("Unsupported GMA version "+std::to_string(version)+": "+python_path_text(path));
     read_int(f,8,path);read_int(f,8,path);if(version>1)while(!cstr(f,path).empty()){}
     cstr(f,path);cstr(f,path);cstr(f,path);read_int(f,4,path);uint64_t offset=0;
     while(read_int(f,4,path)){
         std::string raw=cstr(f,path);
         auto name=content_path(std::move(raw));auto length=read_int(f,8,path);auto crc=static_cast<uint32_t>(read_int(f,4,path));
-        if(length>uint64_t(std::numeric_limits<int64_t>::max())||length>size||offset>size-length||entries.count(name))throw Error("Invalid GMA entry "+name+": "+path_utf8(path));
+        if(length>uint64_t(std::numeric_limits<int64_t>::max())||length>size||offset>size-length||entries.count(name))throw Error("Invalid GMA entry "+name+": "+python_path_text(path));
         entries.emplace(name,Entry{offset,length,crc});offset+=length;
     }
-    data_offset=static_cast<uint64_t>(f.tellg());if(data_offset>size||offset>size-data_offset)throw Error("Truncated GMA payload: "+path_utf8(path));
+    data_offset=static_cast<uint64_t>(f.tellg());if(data_offset>size||offset>size-data_offset)throw Error("Truncated GMA payload: "+python_path_text(path));
 }
 Bytes GMA::read(const std::string& name)const{
-    const auto& e=entries.at(content_path(name));std::ifstream f(path,std::ios::binary);if(!f)throw Error("Cannot open GMA: "+path_utf8(path));
+    const auto& e=entries.at(content_path(name));std::ifstream f(path,std::ios::binary);if(!f)throw Error("Cannot open GMA: "+python_path_text(path));
     f.seekg(static_cast<std::streamoff>(data_offset+e.offset));Bytes out(static_cast<size_t>(e.length));f.read(reinterpret_cast<char*>(out.data()),static_cast<std::streamsize>(out.size()));
     uLong crc=crc32(0L,Z_NULL,0);size_t at=0;while(at<out.size()){auto n=std::min(out.size()-at,size_t(std::numeric_limits<uInt>::max()));crc=crc32(crc,out.data()+at,static_cast<uInt>(n));at+=n;}
-    if(static_cast<uint64_t>(f.gcount())!=e.length||crc!=e.crc)throw Error("GMA payload/CRC mismatch for "+name+": "+path_utf8(path));return out;
+    if(static_cast<uint64_t>(f.gcount())!=e.length||crc!=e.crc)throw Error("GMA payload/CRC mismatch for "+name+": "+python_path_text(path));return out;
 }
 }

@@ -133,14 +133,14 @@ public:
 struct Content::Impl {struct Source {std::string kind,label;fs::path path;std::shared_ptr<GMA> gma;std::shared_ptr<VPKArchive> vpk;};std::shared_ptr<ZipArchive> pak;std::vector<Source> sources;};
 Content::Content(const BSP& bsp,const fs::path& p):impl(std::make_shared<Impl>()),game(p){
     auto pak=bsp.lump(40);if(!pak.empty())impl->pak=std::make_shared<ZipArchive>(std::move(pak));auto addons=game/"addons";
-    for(const auto& path:sorted_paths(addons,[](const fs::directory_entry& e){return e.is_directory();}))impl->sources.push_back({"folder",path_utf8(path),path,{},{}});
+    for(const auto& path:sorted_paths(addons,[](const fs::directory_entry& e){return e.is_directory();}))impl->sources.push_back({"folder",python_path_text(path),path,{},{}});
     std::optional<fs::path> steamapps;for(auto parent=game.parent_path();!parent.empty();){if(lower_slashes(path_utf8(parent.filename()))=="steamapps"){steamapps=parent;break;}auto next=parent.parent_path();if(next==parent)break;parent=next;}
     auto archives=sorted_paths(addons,[](const fs::directory_entry& e){return glob_name(e.path()).ends_with(".gma");});if(steamapps){auto workshop=*steamapps/"workshop"/"content"/"4000";for(const auto& dir:sorted_paths(workshop,[](const fs::directory_entry& e){return e.is_directory();})){auto more=sorted_paths(dir,[](const fs::directory_entry& e){return glob_name(e.path()).ends_with(".gma");});archives.insert(archives.end(),more.begin(),more.end());}}std::stable_sort(archives.begin(),archives.end(),path_less);
-    for(const auto& path:archives){try{auto archive=std::make_shared<GMA>(path);impl->sources.push_back({"gma",path_utf8(path),path,archive,{}});gma_archives++;}catch(const std::exception& e){archive_errors.push_back(e.what());}}
+    for(const auto& path:archives){try{auto archive=std::make_shared<GMA>(path);impl->sources.push_back({"gma",python_path_text(path),path,archive,{}});gma_archives++;}catch(const std::exception& e){archive_errors.push_back(e.what());}}
     auto engine=game.parent_path()/"sourceengine";std::vector<fs::path> paths={game/"garrysmod_dir.vpk"};std::set<std::string> known={"hl2_misc_dir.vpk","content_hl2_dir.vpk","content_cstrike_dir.vpk"};for(const auto& n:{"hl2_misc_dir.vpk","content_hl2_dir.vpk","content_cstrike_dir.vpk"})paths.push_back(engine/n);
     for(const auto& path:sorted_paths(engine,[](const fs::directory_entry& e){return glob_name(e.path()).ends_with("_dir.vpk");}))if(!known.count(path_utf8(path.filename())))paths.push_back(path);
-    for(const auto& path:paths)if(fs::is_regular_file(path))impl->sources.push_back({"vpk",path_utf8(path),path,{},std::make_shared<VPKArchive>(path)});
-    for(const auto& path:{game,engine,game/"download"})impl->sources.push_back({"folder",path_utf8(path),path,{},{}});
+    for(const auto& path:paths)if(fs::is_regular_file(path))impl->sources.push_back({"vpk",python_path_text(path),path,{},std::make_shared<VPKArchive>(path)});
+    for(const auto& path:{game,engine,game/"download"})impl->sources.push_back({"folder",python_path_text(path),path,{},{}});
 }
 std::optional<Bytes> Content::read(std::string name){
     name=content_path(std::move(name));std::optional<Bytes> selected;std::string selected_source,selected_hash;Json alternatives=Json::array();

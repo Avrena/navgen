@@ -60,6 +60,7 @@ class M2Tests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Invalid content path'):GMA(p)
 
     def test_content_precedence_and_conflict(self):
+        WORK.mkdir(exist_ok=True)
         with TemporaryDirectory(dir=WORK) as temp:
             steamapps=Path(temp)/'steamapps';game=steamapps/'common/Demo/garrysmod'
             model=game/'addons/loose/models/test.mdl';model.parent.mkdir(parents=True);model.write_bytes(b'loose')

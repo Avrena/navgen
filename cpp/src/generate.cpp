@@ -11,7 +11,9 @@
 #include "build_id.hpp"
 #include <cerrno>
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -83,7 +85,7 @@ Json generate(const Options& o){
     if(o.seeds||fs::exists(candidate)){seedfile=candidate;progress("seeds: using "+path_utf8(candidate)+(o.seeds?" (explicit override)":" (automatic sidecar)"));}
     else progress("seeds: no sidecar found at "+path_utf8(candidate)+"; using BSP seeds");
     auto seeds=bsp.seeds(seedfile);Json seed_input=nullptr;
-    if(seedfile)seed_input={{"path",path_utf8(fs::weakly_canonical(*seedfile))},{"sha256",sha256(read_file(*seedfile))},{"source",o.seeds?"explicit":"sidecar"}};
+    if(seedfile)seed_input={{"path",python_path_text(fs::weakly_canonical(*seedfile))},{"sha256",sha256(read_file(*seedfile))},{"source",o.seeds?"explicit":"sidecar"}};
     timings["input"]=now()-start;progress("input: "+path_utf8(bsp.path.filename())+", "+std::to_string(bsp.data.size())+" bytes, "+std::to_string(seeds.size())+" seeds");
     auto dump=o.dump_stages;if(!dump.empty()){fs::create_directories(dump);dump_array(dump/"seeds.npy",seeds,"<f8");}
     start=now();auto collision=Collision::load(bsp,o.game,o.missing_phy);timings["collision"]=now()-start;
@@ -113,7 +115,7 @@ Json generate(const Options& o){
     if(same_resolved_path(target,bsp.path)||(seedfile&&same_resolved_path(target,*seedfile)))throw Error("Output must not replace an input BSP or seed file");
     atomic_write(target,raw);timings["write_validate"]=now()-start;timings["total"]=now()-total;
     std::size_t links=0;for(const auto& a:nav["areas"])for(const auto& ls:a["links"])links+=ls.size();
-    Json result={{"map",path_utf8(bsp.path)},{"map_sha256",sha256(bsp.data)},{"out",path_utf8(target)},{"nav_sha256",sha256(raw)},
+    Json result={{"map",python_path_text(bsp.path)},{"map_sha256",sha256(bsp.data)},{"out",python_path_text(target)},{"nav_sha256",sha256(raw)},
         {"bsp_size",bsp.data.size()},{"nav_bytes",raw.size()},{"areas",nav["areas"].size()},{"links",links},{"nodes",sampled.arrays.size()},{"seeds",seeds.size()},
         {"traces",collision.scene.traces()},{"profile",o.profile},{"merge",merge_info},{"ladders",ladder_info},
         {"seed_discovery",{{"mode",o.seed_discovery},{"effective_seeds",effective},{"details",discovery}}},
