@@ -2,6 +2,8 @@
 
 This C++20 implementation generates Source/Garry's Mod NAV v16, subversion 0 files directly from a compiled BSP. It preserves the Python generator's processing order and numerical behaviour. Python is needed only for the reference and differential tests; the executable does not start Python, download assets, or require a game process.
 
+Inputs include BSP v20 and L4D2 BSP v21. The reader detects standard and L4D2 v21 lump-directory layouts, validates every lump range and normalises the directory before loading geometry. This is BSP input support for Garry's Mod NAV generation; the output does not contain L4D2-specific NAV records or Director analysis. See the main README for model content and seed requirements.
+
 The production target is MSVC x64 (Visual Studio 2022 or 2026). GCC on Linux is also supported. The dependencies are vendored, including the exact Qhull sources from SciPy 1.15.3. No dependency is downloaded during configuration or at runtime. See `third_party/README.md` for versions, source provenance and licences, and `../reports/CPP.md` for measured parity, performance and remaining qualification work.
 
 ## Build

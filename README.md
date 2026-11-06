@@ -4,6 +4,8 @@ navgen builds navigation meshes for Garry's Mod maps without starting the game. 
 
 It follows the Source SDK 2013 `nav_generate` pipeline and adds the hiding-spot analysis that Garry's Mod runs when it generates a mesh. The native executable handles a large map in seconds. A Python implementation is kept as the reference, and both produce byte-identical files.
 
+Both implementations read BSP v20 and Left 4 Dead 2 BSP v21, including v21 files with either the standard Source or L4D2 lump-directory order. Brushes, displacements, static props and Source LZMA-compressed BSP lumps use the same geometry pipeline. Compressed static-prop game lumps are unsupported. The output is always Garry's Mod NAV v16, subversion 0; L4D2's game-specific NAV data and Director analysis are not generated.
+
 ## Features
 
 - **Collision as the generator sees it.** World brushes, brush entities in their spawn state, displacements and static props. Prop physics models are read from the BSP pakfile, addon folders, addon and Workshop GMAs, and the game's VPKs.
@@ -100,6 +102,8 @@ Models and physics files are looked up in this order, and the first match wins:
 6. loose files.
 
 Files that exist in several places with different contents are listed in the JSON summary (`content_audit`). The order is fixed and may differ from the running game's mount order, which matters only when two addons ship different versions of the same model.
+
+For L4D2 BSPs used in Garry's Mod, make the required models and PHY files available through these content locations. Passing an L4D2 installation to `--game` does not reproduce L4D2's VPK/DLC search paths. Maps without `info_player_start` or teleport destinations need a seed file; survivor staging positions are not automatically used as generation seeds.
 
 ## Accuracy and limits
 
