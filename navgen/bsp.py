@@ -1,4 +1,4 @@
-"""BSP v20 geometry, spawn-state entities and deterministic content resolution."""
+"""BSP v20/v21 geometry, spawn-state entities and deterministic content resolution."""
 from __future__ import annotations
 
 import io
@@ -74,6 +74,32 @@ def box_vertices(lo, hi):
     return np.array(list(itertools.product(*zip(lo, hi))), dtype=np.float64)
 
 
+def _lump_directory(data, version):
+    """Normalise Source and L4D2 headers to (offset, length, version, fourCC)."""
+    standard = [struct.unpack_from('<4I', data, 8+16*i) for i in range(64)]
+
+    def valid(lumps):
+        return all(off <= len(data) and size <= len(data)-off and
+                   (not size or off >= 1036) for off, size, _, _ in lumps)
+
+    if version == 20:
+        if not valid(standard):
+            raise ValueError('Invalid BSP lump directory')
+        return standard
+    # L4D2's v21 puts the lump version first; other v21 compilers keep the
+    # standard order. Check the whole directory, including when entities are
+    # empty, rather than treating any small first integer as a version marker.
+    l4d2 = [(off, size, ver, cc) for ver, off, size, cc in standard]
+    standard_valid, l4d2_valid = valid(standard), valid(l4d2)
+    if standard_valid and l4d2_valid and standard != l4d2:
+        raise ValueError('Ambiguous BSP v21 lump directory')
+    if standard_valid:
+        return standard
+    if l4d2_valid:
+        return l4d2
+    raise ValueError('Invalid BSP lump directory')
+
+
 class BSP:
     def __init__(self, path):
         self.path = Path(path)
@@ -81,9 +107,9 @@ class BSP:
         if len(self.data) < 1036 or self.data[:4] != b'VBSP':
             raise ValueError('Not a Source BSP')
         self.version = struct.unpack_from('<I', self.data, 4)[0]
-        if self.version != 20:
-            raise ValueError(f'Expected BSP v20, got {self.version}')
-        self.lumps = [struct.unpack_from('<4I', self.data, 8+16*i) for i in range(64)]
+        if self.version not in (20, 21):
+            raise ValueError(f'Expected BSP v20 or v21, got {self.version}')
+        self.lumps = _lump_directory(self.data, self.version)
         self.entities = [dict(re.findall(r'"([^"\n]*)"\s+"([^"\n]*)"', block))
                          for block in re.findall(r'\{([^{}]*)\}', self.lump(0).decode('latin1'))]
         self.planes = np.frombuffer(self.lump(1), dtype=[('n','<f4',3),('d','<f4'),('type','<i4')])
@@ -106,11 +132,20 @@ class BSP:
             raise ValueError(f'Truncated BSP lump {index}')
         data = self.data[off:off+size]
         if data[:4] == b'LZMA':
+            if len(data) < 17:
+                raise ValueError('Truncated compressed BSP lump')
             actual, packed = struct.unpack_from('<II', data, 4)
+            if packed > len(data)-17:
+                raise ValueError('Truncated compressed BSP lump')
+            if packed < 5:  # Even an empty LZMA stream needs its range-coder state.
+                raise ValueError('Invalid compressed BSP lump length')
             prop = data[12]
             filters = [{'id': lzma.FILTER_LZMA1, 'dict_size': struct.unpack_from('<I',data,13)[0],
                         'lc': prop % 9, 'lp': (prop//9) % 5, 'pb': prop//45}]
-            data = lzma.decompress(data[17:17+packed], format=lzma.FORMAT_RAW, filters=filters)
+            # Valve streams can omit the end marker. Their header supplies the
+            # output size; decode one extra byte to detect an incorrect size.
+            decoder = lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=filters)
+            data = decoder.decompress(data[17:17+packed], max_length=actual+1)
             if len(data) != actual:
                 raise ValueError('Invalid compressed BSP lump length')
         return data

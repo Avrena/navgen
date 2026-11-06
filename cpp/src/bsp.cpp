@@ -35,19 +35,43 @@ std::string glob_name(const fs::path& path){auto name=path_utf8(path.filename())
     return name;
 }
 void* lz_alloc(ISzAllocPtr,size_t n){return std::malloc(n);}void lz_free(ISzAllocPtr,void* p){std::free(p);}
-Bytes raw_lzma(std::span<const uint8_t> packed,std::span<const uint8_t> props,size_t actual){
+Bytes raw_lzma(std::span<const uint8_t> packed,std::span<const uint8_t> props,size_t actual,bool require_full_input=false){
     Bytes out(actual);SizeT dest=out.size(),source=packed.size();ISzAlloc alloc={lz_alloc,lz_free};ELzmaStatus status;
     SRes r=LzmaDecode(out.data(),&dest,packed.data(),&source,props.data(),static_cast<unsigned>(props.size()),LZMA_FINISH_END,&status,&alloc);
-    if(r!=SZ_OK||dest!=actual)throw Error("Invalid compressed BSP lump length");return out;
+    // A no-marker stream can reach an earlier range-coder boundary when the
+    // claimed output is too short. BSP's packed length must also be consumed.
+    if(r!=SZ_OK||dest!=actual||(require_full_input&&source!=packed.size()))throw Error("Invalid compressed BSP lump length");return out;
 }
 std::vector<fs::path> sorted_paths(const fs::path& directory,const std::function<bool(const fs::directory_entry&)>& accept){std::vector<fs::path> out;if(!fs::exists(directory))return out;for(const auto& e:fs::directory_iterator(directory))if(accept(e))out.push_back(e.path());std::stable_sort(out.begin(),out.end(),path_less);return out;}
+using LumpDirectory=std::array<std::array<uint32_t,4>,64>;
+LumpDirectory lump_directory(std::span<const uint8_t> data,uint32_t version){
+    LumpDirectory standard{};
+    for(int i=0;i<64;i++)for(int j=0;j<4;j++)standard[i][j]=integer<uint32_t>(data,8+16*i+4*j);
+    auto valid=[&](const LumpDirectory& lumps){
+        for(const auto& entry:lumps){auto [off,size,ver,cc]=entry;
+            if(off>data.size()||size>data.size()-off||(size&&off<1036))return false;
+        }return true;
+    };
+    if(version==20){if(!valid(standard))throw Error("Invalid BSP lump directory");return standard;}
+    // L4D2 v21 uses (version, offset, length, fourCC). Other v21 compilers
+    // retain the standard order. Validate all entries, even with no entities.
+    LumpDirectory l4d2=standard;
+    for(auto& entry:l4d2){auto [ver,off,size,cc]=entry;entry={off,size,ver,cc};}
+    bool standard_valid=valid(standard),l4d2_valid=valid(l4d2);
+    if(standard_valid&&l4d2_valid&&standard!=l4d2)throw Error("Ambiguous BSP v21 lump directory");
+    if(standard_valid)return standard;
+    if(l4d2_valid)return l4d2;
+    throw Error("Invalid BSP lump directory");
+}
 }
 V3 vector(const std::string& value,V3 fallback){if(value.empty())return fallback;auto parts=words(value);V3 out{};for(size_t i=0;i<std::min<size_t>(3,parts.size());i++)out[i]=python_float(parts[i]);return out;}
 V3 entity_angles(const Entity& e){if(!evalue(e,"angles").empty())return vector(evalue(e,"angles"));double yaw=python_float(evalue(e,"angle","0"));if(yaw==-1)return {-90.,0.,0.};if(yaw==-2)return {90.,0.,0.};return {0.,yaw,0.};}
 M3 rotation(const V3& angles){constexpr double factor=3.141592653589793238462643383279502884/180.;double p=angles[0]*factor,y=angles[1]*factor,r=angles[2]*factor;double cp=std::cos(p),sp=std::sin(p),cy=std::cos(y),sy=std::sin(y),cr=std::cos(r),sr=std::sin(r);return {V3{cy*cp,cy*sp*sr-sy*cr,cy*sp*cr+sy*sr},V3{sy*cp,sy*sp*sr+cy*cr,sy*sp*cr-cy*sr},V3{-sp,cp*sr,cp*cr}};}
 std::vector<V3> box_vertices(const V3& lo,const V3& hi){std::vector<V3> out;out.reserve(8);for(int x=0;x<2;x++)for(int y=0;y<2;y++)for(int z=0;z<2;z++)out.push_back({x?hi[0]:lo[0],y?hi[1]:lo[1],z?hi[2]:lo[2]});return out;}
 BSP::BSP(const fs::path& p):path(p),data(read_file(p)){
-    if(data.size()<1036||std::string(data.begin(),data.begin()+4)!="VBSP")throw Error("Not a Source BSP");version=integer<uint32_t>(data,4);if(version!=20)throw Error("Expected BSP v20, got "+std::to_string(version));for(int i=0;i<64;i++)for(int j=0;j<4;j++)lumps[i][j]=integer<uint32_t>(data,8+16*i+4*j);
+    if(data.size()<1036||std::string(data.begin(),data.begin()+4)!="VBSP")throw Error("Not a Source BSP");
+    version=integer<uint32_t>(data,4);if(version!=20&&version!=21)throw Error("Expected BSP v20 or v21, got "+std::to_string(version));
+    lumps=lump_directory(data,version);
     auto ent=lump(0);std::string entity_text=latin1_utf8(std::string_view(reinterpret_cast<const char*>(ent.data()),ent.size()));std::regex block(R"(\{([^{}]*)\})"),kv("\"([^\"\\n]*)\"\\s+\"([^\"\\n]*)\"");
     for(auto i=std::sregex_iterator(entity_text.begin(),entity_text.end(),block);i!=std::sregex_iterator();++i){Entity e;auto text=(*i)[1].str();for(auto j=std::sregex_iterator(text.begin(),text.end(),kv);j!=std::sregex_iterator();++j)e[(*j)[1].str()]=(*j)[2].str();entities.push_back(std::move(e));}
     auto pl=lump(1);if(pl.size()%20)throw Error("Invalid BSP planes length");for(size_t at=0;at<pl.size();at+=20)planes.push_back({f32(pl,at),f32(pl,at+4),f32(pl,at+8),f32(pl,at+12)});
@@ -57,7 +81,7 @@ BSP::BSP(const fs::path& p):path(p),data(read_file(p)){
     nodes=lump(5);leaves=lump(10);leaf_stride=lumps[10][2]==1?32:56;auto lb=lump(17);for(size_t at=0;at<lb.size();at+=2)leafbrushes.push_back(integer<uint16_t>(lb,at));texinfo=lump(6);faces=lump(7);if(faces.empty())faces=lump(58);
     auto vs=lump(3);if(vs.size()%12)throw Error("Invalid BSP vertices length");for(size_t at=0;at<vs.size();at+=12)vertices.push_back(vec3(vs,at));auto ed=lump(12);for(size_t at=0;at<ed.size();at+=4)edges.push_back({integer<uint16_t>(ed,at),integer<uint16_t>(ed,at+2)});auto se=lump(13);for(size_t at=0;at<se.size();at+=4)surfedges.push_back(integer<int32_t>(se,at));
 }
-Bytes BSP::lump(int i)const{auto [off,size,ver,cc]=lumps.at(i);if(uint64_t(off)+size>data.size())throw Error("Truncated BSP lump "+std::to_string(i));auto out=sliced(data,off,size);if(out.size()>=4&&std::string(out.begin(),out.begin()+4)=="LZMA"){auto actual=integer<uint32_t>(out,4),packed=integer<uint32_t>(out,8);if(out.size()<17||packed>out.size()-17)throw Error("Truncated compressed BSP lump");return raw_lzma(std::span(out).subspan(17,packed),std::span(out).subspan(12,5),actual);}return out;}
+Bytes BSP::lump(int i)const{auto [off,size,ver,cc]=lumps.at(i);if(uint64_t(off)+size>data.size())throw Error("Truncated BSP lump "+std::to_string(i));auto out=sliced(data,off,size);if(out.size()>=4&&std::string(out.begin(),out.begin()+4)=="LZMA"){auto actual=integer<uint32_t>(out,4),packed=integer<uint32_t>(out,8);if(out.size()<17||packed>out.size()-17)throw Error("Truncated compressed BSP lump");return raw_lzma(std::span(out).subspan(17,packed),std::span(out).subspan(12,5),actual,true);}return out;}
 std::vector<int> BSP::model_brushes(int model)const{int64_t index=model;if(index<0)index+=static_cast<int64_t>(models.size());std::vector<int> todo={static_cast<int>(models.at(static_cast<size_t>(index))[9])};std::set<int> visited,found;while(!todo.empty()){int node=todo.back();todo.pop_back();if(!visited.insert(node).second)continue;if(node>=0){todo.push_back(integer<int32_t>(nodes,size_t(node)*32+4));todo.push_back(integer<int32_t>(nodes,size_t(node)*32+8));}else{size_t at=size_t(-1-int64_t(node))*leaf_stride+24;auto first=integer<uint16_t>(leaves,at),count=integer<uint16_t>(leaves,at+2);for(size_t j=first;j<std::min(size_t(first)+count,leafbrushes.size());j++)found.insert(leafbrushes[j]);}}return {found.begin(),found.end()};}
 BrushData BSP::brush(int index)const{
     const auto& b=brushes.at(index);BrushData out;double inf=std::numeric_limits<double>::infinity();out.lo={-inf,-inf,-inf};out.hi={inf,inf,inf};
